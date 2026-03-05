@@ -1,6 +1,6 @@
 # 技术调研报告
 
-> 状态: 初稿
+> 状态: 已落地
 > 最后更新: 2026-03-05
 
 ## 一、飞书 SDK（larksuite/oapi-sdk-go v3）
@@ -12,7 +12,7 @@
 - 连接建立时一次鉴权，后续推送无需处理签名和解密
 - 适合企业内部部署（只需能出公网）
 
-核心用法：
+核心用法（已实现于 `internal/feishu/receiver.go`）：
 
 ```go
 import (
@@ -22,7 +22,7 @@ import (
 )
 
 // 1. 创建事件分发器
-eventHandler := dispatcher.NewEventDispatcher("", "").
+eventHandler := dispatcher.NewEventDispatcher(verificationToken, encryptKey).
     OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
         msg := event.Event.Message
         // ChatType: "p2p" | "group" | "topic"
@@ -40,123 +40,103 @@ wsClient.Start(context.Background()) // 阻塞
 
 ### 消息类型区分
 
-| `ChatType` | 含义 | Session Key |
+| `ChatType` | 含义 | channel_key 格式 |
 |---|---|---|
-| `p2p` | 私聊 | `p2p:{open_id}` |
-| `group` | 群聊（@Bot）| `group:{chat_id}` |
-| `topic` | 话题群 | `thread:{thread_id}` |
+| `p2p` | 私聊 | `p2p:{open_id}:{app_id}` |
+| `group` | 群聊 | `group:{chat_id}:{app_id}` |
+| `topic` / `topic_group` | 话题群 | `thread:{chat_id}:{thread_id}:{app_id}` |
 
-### 消息发送 API
+### 消息内容解析（已实现）
+
+| `MessageType` | Content JSON | 处理方式 |
+|---|---|---|
+| `text` | `{"text":"..."}` | 直接提取 |
+| `image` | `{"image_key":"..."}` | `MessageResource.Get` 下载 |
+| `file` | `{"file_key":"...","file_name":"..."}` | `MessageResource.Get` 下载 |
+| `post` | 富文本结构 | 提取 text 段落拼接 |
+
+### 消息发送 API（已实现于 `internal/feishu/sender.go`）
 
 ```go
-// 发送文本消息
+// 发送交互式卡片（思考中...）
 client.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
-    ReceiveIdType(larkim.ReceiveIdTypeChatId).
+    ReceiveIdType("chat_id").
     Body(larkim.NewCreateMessageReqBodyBuilder().
-        MsgType(larkim.MsgTypeText).
+        MsgType(larkim.MsgTypeInteractive).
         ReceiveId(chatID).
-        Content(`{"text":"hello"}`).
+        Content(cardJSON).
         Build()).
     Build())
 
-// 回复消息（保持在同一 thread）
-// ReplyToMessageId 字段指定被回复的消息 ID
-```
-
-### 卡片消息 + 流式更新（Typing 模拟）
-
-飞书没有原生 Typing Indicator API，标准做法：
-1. 收到消息后立即发送"思考中..."卡片（`MsgTypeInteractive`）
-2. Claude 输出过程中定期 PATCH 更新卡片内容
-3. 完成后最终 PATCH 写入完整结果
-
-```go
-// 更新已发送的卡片
+// PATCH 更新卡片内容（最终结果）
 client.Im.Message.Patch(ctx, larkim.NewPatchMessageReqBuilder().
     MessageId(messageID).
     Body(larkim.NewPatchMessageReqBodyBuilder().
-        Content(newCardContent).
+        Content(newCardJSON).
         Build()).
     Build())
 ```
 
 ---
 
-## 二、技术选型
-
-### 最终选型
+## 二、技术选型（最终落地）
 
 | 组件 | 选型 | 理由 |
 |---|---|---|
 | 飞书连接 | `oapi-sdk-go/v3` + larkws | 官方 SDK，WS 模式免公网 |
-| HTTP 框架 | `net/http` + `chi`（可选） | SDK 返回标准 Handler，chi 零依赖 |
-| 定时任务 | `gocron/v2` | 积极维护，支持分布式锁，robfig/cron 已停更 |
-| ORM | GORM | 数据模型简单，快速开发，支持 SQLite/PostgreSQL |
-| 数据库 | SQLite（先行） | 单机部署够用，WAL 模式 30k TPS；预留 PostgreSQL 升级 |
-| 配置 | Viper | 支持 YAML + ENV 覆盖，12-Factor |
-| 日志 | `log/slog`（标准库） | Go 1.21+ 内置，零依赖 |
+| 配置 | Viper | YAML + 结构体映射，支持默认值 |
+| ORM | GORM | 快速开发，AutoMigrate |
+| 数据库 | SQLite WAL（`glebarez/sqlite`）| CGO-free，单机够用，30k TPS |
+| 定时任务 | `gocron/v2` | 积极维护，API 简洁 |
+| 文件监听 | `fsnotify` | 跨平台 inotify 封装 |
+| 日志 | `log/slog`（标准库）| Go 1.21+ 内置，零依赖 |
 | Claude 集成 | `exec.Cmd` | 直接调用 claude CLI，控制最大 |
+| Cron 解析 | `robfig/cron/v3` | gocron 间接依赖，复用于表达式校验 |
+| UUID | `google/uuid` | Session / Task ID 生成 |
 
 ### SQLite 注意事项
 
 使用 CGO-free 版本避免交叉编译问题：
 
 ```go
-import _ "modernc.org/sqlite"
-// 开启 WAL 模式提升并发读写
-db, _ := gorm.Open(sqlite.Open("file:bot.db?_journal_mode=WAL"), &gorm.Config{})
+import (
+    "github.com/glebarez/sqlite"   // 封装 modernc.org/sqlite
+    "gorm.io/gorm"
+)
+
+db, _ := gorm.Open(sqlite.Open("file:bot.db?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{})
 ```
 
 ---
 
-## 三、Claude CLI 集成
+## 三、Claude CLI 集成（已实现于 `internal/claude/executor.go`）
 
 ### 关键标志
 
 | 标志 | 说明 |
 |---|---|
-| `--cwd <path>` | 指定 workspace 目录（加载该目录的 CLAUDE.md、skills 等）|
+| `--cwd <path>` | 指定工作目录（加载该目录的 CLAUDE.md、skills 等）|
 | `--resume <session-id>` | 复用历史会话上下文 |
 | `-p <prompt>` | 非交互模式，指定 prompt 并执行后退出 |
-| `--output-format stream-json` | 流式 JSON 输出（NDJSON）|
-| `--permission-mode acceptEdits` | 自动接受文件编辑操作（推荐，比 dangerously-skip-permissions 更精确）|
-| `--allowedTools "Bash Read Edit Write mcp__xxx"` | 限制 claude 可用工具，空格分隔，支持 MCP 工具 |
-| `--max-turns <n>` | 限制最大 agentic 轮次，防止失控 |
-| `--debug` | 输出调试信息 |
+| `--output-format stream-json` | 流式 NDJSON 输出 |
+| `--permission-mode acceptEdits` | 自动接受文件编辑操作 |
+| `--allowedTools "..."` | 限制可用工具，空格分隔 |
+| `--max-turns <n>` | 限制最大 agentic 轮次 |
 
-### 推荐调用示例（参考实际用法）
+### 推荐调用示例
 
 ```
 claude \
   -p "Review this MR and implement the requested changes" \
-  --cwd /workspaces/code-review \
+  --cwd /workspaces/sessions/abc-123 \
   --permission-mode acceptEdits \
   --allowedTools "Bash Read Edit Write mcp__feishu" \
   --output-format stream-json \
+  --max-turns 20 \
   --resume <claude_session_id>
 ```
 
-**权限模式对比**：
-
-| 模式 | 说明 | 适用场景 |
-|---|---|---|
-| `--permission-mode acceptEdits` | 自动接受文件编辑，其余操作仍确认 | 大多数场景 |
-| `--dangerously-skip-permissions` | 跳过所有权限确认 | 完全受控的自动化环境 |
-
-**`--allowedTools` 的作用**：限制 claude 能调用的工具范围，有利于安全控制。每个应用可在配置中定义不同的 allowedTools。
-
-### 会话复用
-
-```
-首次调用 → claude --cwd /ws/proj --print --output-format stream-json "问题"
-           → 从 stream-json 的 system 事件中提取 session_id
-
-后续调用 → claude --cwd /ws/proj --resume <session_id> --print --output-format stream-json "追问"
-```
-
-### stream-json 输出格式
-
-输出为 NDJSON，每行一个事件：
+### stream-json 输出格式（NDJSON）
 
 ```json
 {"type":"system","session_id":"xxx","cwd":"/ws/proj","model":"claude-opus-4-6"}
@@ -164,30 +144,63 @@ claude \
 {"type":"result","subtype":"success","cost_usd":0.01,"duration_ms":3200}
 ```
 
-### 子进程最佳实践
+解析策略：
+- `system` 事件：提取 `session_id` 作为 `claude_session_id` 写入 DB
+- `assistant` 事件：拼接 `content[].text`（用 `strings.Builder`）
+- `result` 事件：记录 cost / duration
+
+### 子进程安全实践（已实现）
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 defer cancel()
 
 cmd := exec.CommandContext(ctx, "claude", args...)
-cmd.Dir = workspaceDir
-cmd.WaitDelay = 30 * time.Second          // 强制关闭孤立 pipe
+cmd.Dir = sessionDir
+cmd.WaitDelay = 30 * time.Second           // 强制关闭孤立 pipe
 cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // 进程组，防信号泄漏
 
-pr, pw := io.Pipe()
-cmd.Stdout = pw
+// Scanner 设置 1 MiB 缓冲，防止大响应截断
+scanner := bufio.NewScanner(stdout)
+scanner.Buffer(make([]byte, 1<<20), 1<<20)
 
-go func() { defer pw.Close(); cmd.Run() }()
-
-scanner := bufio.NewScanner(pr)
-for scanner.Scan() {
-    // 逐行解析 JSON 事件
-}
+// stderr 用 sync.WaitGroup 追踪，cmd.Wait() 后 Join
 ```
 
 ### 注意事项
 
-- `--cwd` 设置工作目录，但 claude 会向上查找 CLAUDE.md；若需完全隔离，在 workspace 根目录创建 `.git/HEAD` 阻止向上遍历
-- 非 TTY 环境可能有输出缓冲，设置 `TERM=xterm-256color` 或 `FORCE_COLOR=0` 环境变量
-- 单个 session 的 context 越长消耗 token 越多，需要定期 compact 或限制历史长度
+- `--cwd` 设置工作目录，claude 会向上查找 CLAUDE.md；session 目录在 workspace 子目录内，会自然继承 workspace 级配置
+- 非 TTY 环境设置 `TERM=xterm-256color` + `FORCE_COLOR=0` 防止输出缓冲
+- Scanner 默认 64 KiB 限制已通过 `scanner.Buffer` 扩展到 1 MiB
+
+---
+
+## 四、并发与安全设计
+
+### 初始化循环依赖
+
+`feishu.Receiver` 需要 `Dispatcher` 接口，`session.Manager` 需要 `feishu.Sender`。通过 `dispatchForwarder` 打破：
+
+```go
+type dispatchForwarder struct {
+    target atomic.Pointer[session.Manager]
+}
+// 在所有 goroutine 启动前通过 atomic.Store 写入
+fwd.target.Store(sessionMgr)
+```
+
+### 优雅关闭流程
+
+```
+SIGINT/SIGTERM
+  → ctx cancel
+  → taskScheduler.Stop()
+  → sessionMgr.Wait()         ← 等待所有 worker 完成
+  → httpServer.Shutdown(10s)
+```
+
+### 附件安全
+
+- 下载限制：`io.LimitReader(body, 100 MiB)`
+- `DownloadURL` 接受 `context.Context`，可被取消
+- 附件移入 session/attachments/，7 天后归档清理（30 天强制）

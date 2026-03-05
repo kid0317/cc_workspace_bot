@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A personal/team assistant bot built on Feishu (Lark) and Claude Code. The bot receives messages via the Feishu event subscription system and responds using Claude AI. Written in Go, using `github.com/larksuite/oapi-sdk-go` as the Feishu SDK.
-项目的设计文档在docs/design.md
-项目的需求文档在docs/requirements.md
+**cc-workspace-bot** — 企业内部飞书 AI 助理平台。
+
+每个飞书应用对应一个 workspace 目录，用户发消息后由框架路由到对应 workspace 执行 `claude` CLI，将结果通过交互式卡片回复给用户。
+
+- 设计文档：`docs/design.md`
+- 需求文档：`docs/requirements.md`
+- 技术调研：`docs/tech-research.md`
 
 ## Common Commands
 
@@ -14,17 +18,26 @@ A personal/team assistant bot built on Feishu (Lark) and Claude Code. The bot re
 # Build
 go build ./...
 
-# Run
+# Run (需先配置 config.yaml)
 go run ./cmd/server
+
+# Run with custom config
+go run ./cmd/server -config /path/to/config.yaml
 
 # Test
 go test ./...
 
-# Run a single test
-go test ./internal/feishu/... -run TestHandleMessage
-
 # Test with coverage
 go test ./... -cover
+
+# Test with race detector
+go test -race ./...
+
+# Build with race detector (CI 推荐)
+go build -race ./...
+
+# Vet
+go vet ./...
 
 # Lint (requires golangci-lint)
 golangci-lint run
@@ -36,53 +49,181 @@ gofmt -w .
 go mod tidy
 ```
 
-## Architecture
+## Directory Structure
 
 ```
-cmd/
-  server/         # Main entry point: HTTP server + Feishu event listener
-internal/
-  feishu/         # Feishu SDK integration (oapi-sdk-go)
-    handler.go    # Event dispatcher: routes incoming Feishu events
-    sender.go     # Sends messages back to Feishu (text, cards, etc.)
-  claude/         # Claude Code / Claude API integration
-    client.go     # Wraps Claude API calls
-    session.go    # Manages per-conversation context/history
-  bot/            # Core bot logic
-    router.go     # Dispatches commands/intents to handlers
-    handlers/     # Individual command handlers
-  config/         # Config loading from env vars
+cc-workspace-bot/
+├── cmd/
+│   └── server/main.go          # 入口：加载配置、连线各组件、启动
+├── internal/
+│   ├── config/
+│   │   └── config.go           # Viper YAML 配置结构 + Validate()
+│   ├── model/
+│   │   └── models.go           # GORM 数据模型（Channel / Session / Message / Task）
+│   ├── db/
+│   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
+│   ├── claude/
+│   │   └── executor.go         # 子进程调用 claude CLI，stream-json 解析
+│   ├── feishu/
+│   │   ├── receiver.go         # WS 事件解析、附件下载、Dispatcher 接口
+│   │   └── sender.go           # 发送卡片（SendThinking/UpdateCard/SendText）
+│   ├── session/
+│   │   ├── manager.go          # channel_key → Worker 懒启动映射（sync.Map + WaitGroup）
+│   │   └── worker.go           # 单 channel 串行队列、/new 命令、空闲超时归档
+│   ├── task/
+│   │   ├── watcher.go          # fsnotify 监听 tasks/ 目录变更
+│   │   ├── scheduler.go        # gocron/v2 调度器管理
+│   │   └── runner.go           # 定时任务执行（YAML 加载 + claude 调用）
+│   └── workspace/
+│       └── init.go             # workspace 目录初始化 + 模板复制（跳过 symlink）
+├── workspaces/
+│   └── _template/              # 新 workspace 默认模板
+│       ├── CLAUDE.md           # workspace 级 AI 指令
+│       └── skills/
+│           ├── feishu.md       # 飞书操作说明
+│           ├── memory.md       # 长记忆读写规范（flock）
+│           └── task.md         # 定时任务 YAML 格式规范
+├── config.yaml                 # 应用配置示例
+├── go.mod / go.sum
+└── bot.db                      # SQLite 数据库（运行时生成）
+```
+
+## Architecture
+
+### 整体数据流
+
+```
+飞书用户
+  → 飞书 WS 推送（P2MessageReceiveV1）
+  → feishu.Receiver（解析消息 / 下载附件）
+  → session.Manager.Dispatch()
+  → session.Worker（按 channel_key 串行队列）
+  → claude.Executor（子进程 claude CLI，stream-json）
+  → feishu.Sender（PATCH 卡片展示结果）
+```
+
+### channel_key 格式
+
+| 飞书渠道 | channel_key |
+|---|---|
+| 单聊 | `p2p:{open_id}:{app_id}` |
+| 群聊 | `group:{chat_id}:{app_id}` |
+| 话题群 | `thread:{chat_id}:{thread_id}:{app_id}` |
+
+### 关键设计决策
+
+| 决策 | 方案 |
+|---|---|
+| 初始化循环依赖 | `dispatchForwarder`（`atomic.Pointer[session.Manager]`）|
+| 并发隔离 | `--cwd sessions/<id>/`，session 目录级隔离 |
+| Context 管理 | `--resume <claude_session_id>` 复用，`/new` 时清空 |
+| 任务创建 | claude 写 `tasks/<uuid>.yaml`，fsnotify 自动注册 |
+| 内存共享写 | workspace `memory/` 目录用 flock 加锁（skill 层实现）|
+| 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker 完成后再退出 |
+
+## Configuration
+
+所有配置通过 `config.yaml` 加载（Viper），**不使用环境变量**：
+
+```yaml
+apps:
+  - id: "product-assistant"
+    feishu_app_id: "cli_xxx"
+    feishu_app_secret: "xxx"
+    feishu_verification_token: "xxx"
+    feishu_encrypt_key: ""          # 可选
+    workspace_dir: "./workspaces/product-assistant"
+    allowed_chats: []               # 空 = 不限制
+    claude:
+      permission_mode: "acceptEdits"
+      allowed_tools:
+        - "Bash"
+        - "Read"
+        - "Edit"
+        - "Write"
+
+server:
+  port: 8080
+
+claude:
+  timeout_minutes: 5
+  max_turns: 20
+
+session:
+  worker_idle_timeout_minutes: 30   # Worker 空闲超时
+
+cleanup:
+  attachments_retention_days: 7
+  attachments_max_days: 30
+  schedule: "0 2 * * *"
 ```
 
 ## Key Concepts
 
-**Feishu Event Flow**: Feishu sends webhook POST requests to the server. The `internal/feishu/handler.go` verifies the signature, decodes the event, and dispatches it. Message events trigger Claude API calls; the response is sent back via `sender.go`.
+### claude.Executor
 
-**Session Management**: Feishu conversations (1:1 or group chats) map to Claude conversation sessions. Each chat ID gets its own message history to maintain context.
+通过 `exec.Cmd` 调用 `claude` CLI，关键参数：
 
-**Authentication**: Feishu app credentials (`APP_ID`, `APP_SECRET`) and Claude API key (`ANTHROPIC_API_KEY`) are loaded from environment variables — never hardcoded.
-
-## Feishu SDK Usage
-
-```go
-import larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-import larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
-
-client := lark.NewClient(appID, appSecret)
+```
+claude \
+  -p "<prompt>" \
+  --cwd <session_dir> \
+  --output-format stream-json \
+  --permission-mode acceptEdits \
+  --allowedTools "Bash Read Edit Write" \
+  --max-turns 20 \
+  --resume <claude_session_id>   # 省略 = 新 context
 ```
 
-Event subscription uses the SDK's built-in HTTP handler:
-```go
-httpserver.NewEventDispatcherHandler(verificationToken, encryptKey, ...)
-```
+从 `stream-json` 的 `system` 事件提取 `session_id` 写回 DB，后续调用带 `--resume` 复用 context。
 
-## Environment Variables
+### session.Worker
 
-| Variable | Description |
+- 每个 `channel_key` 对应一个常驻 goroutine（懒启动）
+- 消息队列深度 64，串行处理
+- 空闲 30 分钟后自动退出并归档 session
+- `/new` 命令：归档当前 session，创建新 session 目录
+
+### 附件处理
+
+飞书图片/文件 → 下载到 `tmp/` → `moveAttachments` 移入 `sessions/<id>/attachments/` → prompt 中路径替换为绝对路径 → claude 通过 `Read` 工具访问。
+
+### 定时任务
+
+claude 通过 `task` skill 写入 `<workspace>/tasks/<uuid>.yaml` → fsnotify 触发 → DB 更新 + gocron Job 注册。YAML 文件为 source of truth。
+
+## Dependencies
+
+| 库 | 用途 |
 |---|---|
-| `FEISHU_APP_ID` | Feishu app ID |
-| `FEISHU_APP_SECRET` | Feishu app secret |
-| `FEISHU_VERIFICATION_TOKEN` | Webhook verification token |
-| `FEISHU_ENCRYPT_KEY` | Webhook payload encryption key (optional) |
-| `ANTHROPIC_API_KEY` | Claude API key |
-| `PORT` | HTTP server port (default: 8080) |
+| `github.com/larksuite/oapi-sdk-go/v3` | 飞书 SDK（WS 模式 + IM API）|
+| `github.com/glebarez/sqlite` | CGO-free SQLite GORM 驱动 |
+| `gorm.io/gorm` | ORM（SQLite WAL 模式）|
+| `github.com/go-co-op/gocron/v2` | 定时任务调度器 |
+| `github.com/fsnotify/fsnotify` | 文件系统事件监听 |
+| `github.com/spf13/viper` | YAML 配置加载 |
+| `github.com/robfig/cron/v3` | Cron 表达式解析（gocron 间接依赖，直接用于校验）|
+| `gopkg.in/yaml.v3` | task YAML 解析 |
+| `github.com/google/uuid` | Session / Task ID 生成 |
+
+## Workspace Template
+
+新应用自动从 `workspaces/_template/` 复制初始配置。每个 workspace 结构：
+
+```
+workspaces/<app-id>/
+├── CLAUDE.md              # app 级 AI 指令（从模板复制，可按场景自定义）
+├── .memory.lock           # flock 锁文件（框架自动创建）
+├── skills/
+│   ├── feishu.md          # 飞书操作说明
+│   ├── memory.md          # 长记忆读写规范
+│   └── task.md            # 定时任务创建规范
+├── memory/                # 长期记忆（跨 session 共享，flock 保护）
+├── tasks/                 # 定时任务 YAML（claude 写，watcher 监听）
+└── sessions/
+    └── <session-id>/
+        ├── SESSION_CONTEXT.md  # 框架注入的绝对路径上下文
+        └── attachments/        # 附件（定期清理）
+```
+
+claude 启动时 `--cwd` 指向 `sessions/<session-id>/`，向上查找 `CLAUDE.md` 和 `skills/`。

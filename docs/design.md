@@ -1,7 +1,28 @@
 # 系统设计文档
 
-> 状态: 已评审
+> 状态: 已实现
 > 最后更新: 2026-03-05
+
+## 实现状态速查
+
+| 模块 | 实现文件 | 状态 |
+|---|---|---|
+| 配置加载 + 校验 | `internal/config/config.go` | ✅ |
+| 数据库（SQLite WAL）| `internal/db/db.go` | ✅ |
+| 数据模型 | `internal/model/models.go` | ✅ |
+| Claude CLI 执行器 | `internal/claude/executor.go` | ✅ |
+| 飞书 WS 接收 + 附件下载 | `internal/feishu/receiver.go` | ✅ |
+| 飞书消息/卡片发送 | `internal/feishu/sender.go` | ✅ |
+| Session Manager | `internal/session/manager.go` | ✅ |
+| Session Worker | `internal/session/worker.go` | ✅ |
+| Task Watcher（fsnotify）| `internal/task/watcher.go` | ✅ |
+| Task Scheduler（gocron）| `internal/task/scheduler.go` | ✅ |
+| Task Runner | `internal/task/runner.go` | ✅ |
+| Workspace 初始化 | `internal/workspace/init.go` | ✅ |
+| Workspace 模板 | `workspaces/_template/` | ✅ |
+| 主入口 | `cmd/server/main.go` | ✅ |
+| 附件定期清理 | — | ⏳ 待实现 |
+| 测试覆盖 | — | ⏳ 待补充 |
 
 ---
 
@@ -428,35 +449,38 @@ workspaces/<app-id>/
 ```
 cc-workspace-bot/
 ├── cmd/
-│   └── server/main.go
+│   └── server/main.go          # 入口：配置加载、组件连线、WS 客户端启动
 ├── internal/
-│   ├── config/          # Viper 配置加载
-│   ├── app/             # 应用注册表（config → workspace 映射）
+│   ├── config/
+│   │   └── config.go           # Viper YAML 配置结构 + Validate()
+│   ├── model/
+│   │   └── models.go           # GORM 数据模型（Channel / Session / Message / Task / TaskYAML）
+│   ├── db/
+│   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
 │   ├── feishu/
-│   │   ├── receiver.go  # WS 事件解析、附件下载、分发
-│   │   └── sender.go    # 发消息、卡片 PATCH
+│   │   ├── receiver.go         # WS 事件解析、附件下载、Dispatcher 接口
+│   │   └── sender.go           # SendThinking / UpdateCard / SendText
 │   ├── session/
-│   │   ├── manager.go   # channel_key → Worker 映射（sync.Map）
-│   │   ├── worker.go    # 单 channel 串行执行 goroutine（含空闲超时）
-│   │   └── model.go     # Channel、Session、Message 数据模型
+│   │   ├── manager.go          # channel_key → Worker 懒启动（sync.Map + WaitGroup）
+│   │   └── worker.go           # 串行队列、/new、空闲超时、附件移动
 │   ├── claude/
-│   │   └── executor.go  # 子进程调用、SESSION_CONTEXT.md 注入、stream-json 解析
+│   │   └── executor.go         # 子进程调用、SESSION_CONTEXT.md 注入、stream-json 解析
 │   ├── workspace/
-│   │   └── init.go      # app/session 目录初始化（从模板复制）
+│   │   └── init.go             # 目录初始化 + 模板复制（跳过 symlink）
 │   └── task/
-│       ├── watcher.go   # fsnotify 监听 tasks/ 目录变更
-│       ├── scheduler.go # gocron 调度器管理
-│       ├── runner.go    # 任务执行逻辑
-│       └── model.go     # Task 数据模型（对应 yaml 结构）
+│       ├── watcher.go          # fsnotify 监听 tasks/ 目录变更
+│       ├── scheduler.go        # gocron/v2 调度器管理
+│       └── runner.go           # 任务执行（YAML 加载 + cron 校验 + claude 调用）
 ├── workspaces/
-│   └── _template/       # 默认 workspace 初始化模板
+│   └── _template/              # 新 workspace 默认模板
 │       ├── CLAUDE.md
 │       └── skills/
 │           ├── feishu.md
-│           ├── memory.md  # 含 flock 写入指南和绝对路径用法
-│           └── task.md    # tasks/*.yaml 格式规范
-├── config.yaml
-└── bot.db
+│           ├── memory.md       # 含 flock 写入指南和绝对路径用法
+│           └── task.md         # tasks/*.yaml 格式规范
+├── config.yaml                 # 应用配置示例
+├── go.mod / go.sum
+└── bot.db                      # SQLite 数据库（运行时生成）
 ```
 
 ---
@@ -535,17 +559,23 @@ flowchart TD
 
 ## 十一、全部设计决策汇总
 
-| 决策点 | 结论 |
-|---|---|
-| CLAUDE.md 向上查找 | 利用，不隔断；父目录可放全局配置 |
-| 并发隔离 | `--cwd` 指向 session 目录；memory/ 用 flock 加锁 |
-| 绝对路径 | 框架注入 SESSION_CONTEXT.md，skill 全用绝对路径 |
-| Context 管理 | `--resume` 复用 claude session；`/new` 时不传 --resume |
-| 群聊触发 | 所有消息触发，claude 自行判断是否回复 |
-| 文件/图片 | 下载到 session/attachments/，替换为绝对路径传给 claude |
-| 结果展示 | 方案 A：仅展示最终结果，一次性 PATCH 卡片 |
-| 任务创建 | claude 通过 task skill 直接写 tasks/*.yaml，框架 watch 注册 |
-| 并发写锁 | memory/ 用 flock；task 文件独立文件名无冲突 |
-| 附件清理 | 两级清理：归档后 7 天 + 最大 30 天强制清理 |
-| Worker 超时 | 空闲 30 分钟自动退出，触发 session 归档 |
-| 数据持久化 | SQLite；task YAML 文件为 source of truth，DB 为运行时镜像 |
+| 决策点 | 结论 | 实现位置 |
+|---|---|---|
+| CLAUDE.md 向上查找 | 利用，不隔断；父目录可放全局配置 | `--cwd sessions/<id>/`，自然继承 workspace |
+| 并发隔离 | `--cwd` 指向 session 目录；memory/ 用 flock 加锁 | `claude/executor.go`，skill 层 flock |
+| 绝对路径 | 框架注入 SESSION_CONTEXT.md，skill 全用绝对路径 | `executor.go:writeSessionContext` |
+| Context 管理 | `--resume` 复用 claude session；`/new` 时不传 --resume | `session/worker.go:getOrCreateSession` |
+| 群聊触发 | 所有消息触发，claude 自行判断是否回复 | `receiver.go`（无过滤），workspace CLAUDE.md 定义策略 |
+| 文件/图片 | 下载到 tmp → 移入 session/attachments/，替换为绝对路径 | `receiver.go:parseContent` + `worker.go:moveAttachments` |
+| 结果展示 | 仅展示最终结果，一次性 PATCH 卡片 | `sender.go:UpdateCard` |
+| 任务创建 | claude 通过 task skill 直接写 tasks/*.yaml，框架 watch 注册 | `task/watcher.go` + `task/scheduler.go` |
+| 并发写锁 | memory/ 用 flock；task 文件独立文件名无冲突 | skill 层实现，框架不干预 |
+| 附件清理 | 两级清理：归档后 7 天 + 最大 30 天强制清理 | ⏳ 待实现（cleanup cron）|
+| Worker 超时 | 空闲 30 分钟自动退出，触发 session 归档 | `session/manager.go`（idleTimeout）|
+| 数据持久化 | SQLite WAL；task YAML 文件为 source of truth，DB 为运行时镜像 | `db/db.go`，`glebarez/sqlite` |
+| 初始化循环依赖 | `dispatchForwarder` + `atomic.Pointer` | `cmd/server/main.go` |
+| 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker | `session/manager.go:Wait()` |
+| HTTP 安全 | 设置 Read/Write/Idle Timeout | `cmd/server/main.go:httpServer` |
+| 附件大小限制 | 100 MiB per file（`io.LimitReader`）| `feishu/receiver.go:saveBody` |
+| Cron 校验 | `LoadYAML` 时用 `robfig/cron/v3` 校验表达式 | `task/runner.go:LoadYAML` |
+

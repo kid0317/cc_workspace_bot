@@ -1,0 +1,44 @@
+apps:
+  - id: "product-assistant"
+    feishu_app_id: "cli_xxx"
+    feishu_app_secret: "xxx"
+    feishu_verification_token: "xxx"
+    feishu_encrypt_key: ""
+    workspace_dir: "./workspaces/product-assistant"
+    allowed_chats: []
+    claude:
+      permission_mode: "acceptEdits"
+      allowed_tools:
+        - "Bash"
+        - "Read"
+        - "Edit"
+        - "Write"
+
+  # - id: "code-review"
+  #   feishu_app_id: "cli_yyy"
+  #   feishu_app_secret: "yyy"
+  #   feishu_verification_token: "yyy"
+  #   feishu_encrypt_key: ""
+  #   workspace_dir: "./workspaces/code-review"
+  #   allowed_chats:
+  #     - "oc_abc123"
+  #   claude:
+  #     permission_mode: "acceptEdits"
+  #     allowed_tools:
+  #       - "Read"
+  #       - "Bash"
+
+server:
+  port: 8080
+
+claude:
+  timeout_minutes: 5
+  max_turns: 20
+
+session:
+  worker_idle_timeout_minutes: 30
+
+cleanup:
+  attachments_retention_days: 7
+  attachments_max_days: 30
+  schedule: "0 2 * * *"
