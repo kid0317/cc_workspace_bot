@@ -1,0 +1,551 @@
+# 系统设计文档
+
+> 状态: 已评审
+> 最后更新: 2026-03-05
+
+---
+
+## 一、系统概览
+
+企业内部飞书 AI 助理平台。每个业务场景对应一个飞书应用 + 一个 Claude Code workspace 目录，用户在飞书中发消息，框架路由到对应 workspace 执行 `claude` CLI，将结果返回给用户。
+
+**部署约束**：单机 · SQLite · 子进程 claude · 应用间逻辑隔离（不同 workspace 目录）· 单机 cron
+
+---
+
+## 二、整体架构
+
+```mermaid
+graph TB
+    subgraph Feishu["飞书平台"]
+        U[用户] -->|发消息| FS[飞书服务]
+    end
+
+    subgraph Bot["cc-workspace-bot（单机）"]
+        WS1[WS Client - App A]
+        WS2[WS Client - App B]
+        WS3[WS Client - App N]
+
+        Router[消息路由器\n+ 附件下载]
+
+        subgraph Workers["Session Workers（per channel_key）"]
+            W1[Worker: p2p:xxx]
+            W2[Worker: group:xxx]
+            W3[Worker: thread:xxx]
+        end
+
+        Exec[Claude Executor]
+        Sender[飞书 Sender]
+        Scheduler[任务调度器 gocron]
+        Watcher[tasks/ 文件 Watcher]
+        DB[(SQLite)]
+    end
+
+    subgraph Workspaces["Workspace 目录（每 app）"]
+        direction TB
+        AppDir["app workspace/\nCLAUDE.md · skills/ · memory/\ntasks/ · sessions/"]
+    end
+
+    FS -->|WS 推送| WS1 & WS2 & WS3
+    WS1 & WS2 & WS3 --> Router
+    Router -->|按 channel_key 入队| W1 & W2 & W3
+    W1 & W2 & W3 --> Exec
+    Exec -->|"--cwd sessions/<session-id>/"| AppDir
+    Exec -->|执行结果| Sender
+    Sender -->|发消息/PATCH 卡片| FS
+    Workers <-->|读写 session/message| DB
+    Watcher -->|watch tasks/ 目录| AppDir
+    Watcher -->|同步任务到| DB
+    Watcher -->|注册/注销 Job| Scheduler
+    Scheduler -->|定时触发| Exec
+```
+
+---
+
+## 三、核心概念
+
+### Channel 与 Session 的关系
+
+```mermaid
+graph LR
+    CK["channel_key（稳定）\n例: group:chat_123:app-a"]
+    Q["消息队列\n（挂在 channel_key 上）"]
+    S1["session_id: abc（archived）"]
+    S2["session_id: xyz（active）"]
+    CS1["claude_session_id: s1（归档）"]
+    CS2["claude_session_id: s2（活跃）"]
+
+    CK --> Q
+    CK --> S1
+    CK --> S2
+    S1 --> CS1
+    S2 --> CS2
+```
+
+- **channel_key**：飞书渠道的稳定标识，对应一个常驻 Worker goroutine 和消息队列
+- **session_id**：当前活跃会话，`/new` 时归档旧 session、生成新 session_id
+- **claude_session_id**：claude CLI 的 `--resume` 参数，新 session 时为空（让 claude 创建全新 context）
+
+### Channel Key 生成规则
+
+| 飞书渠道 | ChatType | channel_key 格式 | 支持 /new |
+|---|---|---|---|
+| 单聊（P2P）| `p2p` | `p2p:{open_id}:{app_id}` | ✅ |
+| 普通群聊 | `group` | `group:{chat_id}:{app_id}` | ✅ |
+| 话题群 | `topic_group` | `thread:{chat_id}:{thread_id}:{app_id}` | ❌ |
+
+### Worker 生命周期
+
+- 第一条消息到达时懒启动
+- 空闲超过 **30 分钟**（可配置）自动退出，下次消息到达时重建
+- Session 空闲超时（Worker 退出时）触发 session 归档，`claude_session_id` 保留不清除（下次可恢复）
+
+---
+
+## 四、数据模型（ER 图）
+
+> TASKS 表由 tasks/ 文件 Watcher 写入，是 YAML 文件的运行时镜像。YAML 文件为 source of truth，DB 记录运行时状态（`last_run_at`、`enabled`）。
+
+```mermaid
+erDiagram
+    APP_CONFIG {
+        string id PK
+        string feishu_app_id
+        string feishu_app_secret
+        string workspace_dir
+    }
+
+    CHANNELS {
+        string channel_key PK
+        string app_id FK
+        string chat_type
+        string chat_id
+        string thread_id
+        datetime created_at
+    }
+
+    SESSIONS {
+        string id PK
+        string channel_key FK
+        string claude_session_id
+        string status
+        string created_by
+        datetime created_at
+        datetime updated_at
+    }
+
+    MESSAGES {
+        string id PK
+        string session_id FK
+        string sender_id
+        string role
+        text content
+        string feishu_msg_id
+        datetime created_at
+    }
+
+    TASKS {
+        string id PK
+        string app_id FK
+        string name
+        string cron_expr
+        string target_type
+        string target_id
+        text prompt
+        bool enabled
+        string created_by
+        datetime last_run_at
+    }
+
+    APP_CONFIG ||--o{ CHANNELS : "has"
+    CHANNELS ||--o{ SESSIONS : "has"
+    SESSIONS ||--o{ MESSAGES : "has"
+    APP_CONFIG ||--o{ TASKS : "mirrors yaml"
+```
+
+---
+
+## 五、消息处理时序
+
+### 5.1 文件/图片预处理
+
+飞书消息中的文件和图片在传给 claude 前需先下载到本地：
+
+```mermaid
+flowchart TD
+    A[收到飞书消息] --> B{含附件?}
+    B -->|否| E[直接构造 prompt]
+    B -->|是| Q[查询当前活跃 session_id]
+    Q --> C[调用飞书 API 下载附件]
+    C --> D["保存到 /workspaces/<app>/sessions/<session-id>/attachments/<ts>_<filename>"]
+    D --> E[将飞书资源引用替换为本地绝对路径]
+    E --> F[投入 session worker 队列]
+```
+
+内容替换：飞书的 file_token 引用 → 替换为本地绝对路径，claude 通过 Read 工具可直接访问。
+
+---
+
+### 5.2 Context 策略
+
+Claude CLI 通过 `--resume <claude_session_id>` 加载历史 context，由 claude 自身管理 session 文件（存储于 `~/.claude/projects/`）。框架只需持久化 `claude_session_id`：
+
+```mermaid
+flowchart LR
+    DB[(sessions 表)] -->|读取 claude_session_id| EXEC[Claude Executor]
+    EXEC -->|"--resume claude_session_id\n（无则省略，开新 context）"| CLAUDE[claude CLI]
+    CLAUDE -->|"system 事件中返回 session_id\n（首次时）"| EXEC
+    EXEC -->|写回| DB
+
+    NEW["/new 命令"] -->|"清空 claude_session_id\n归档当前 session"| DB
+```
+
+- **历史查询**：claude 通过 `--resume` 已有全量历史，如 context 过长可在 CLAUDE.md 中指导 claude 只关注最近对话
+- **`/new`**：清空 `claude_session_id`，下次执行不带 `--resume`，claude 自动开全新 context
+
+---
+
+### 5.3 群聊触发策略
+
+群聊中所有消息均投入队列，由 claude + workspace 的 CLAUDE.md 决定是否回复：
+
+```mermaid
+flowchart TD
+    A[群聊消息到达] --> B[进入 channel 队列]
+    B --> C["claude 执行（携带群聊上下文）"]
+    C --> D{claude 判断是否需要回复}
+    D -->|需要回复| E[发送消息到群]
+    D -->|无需回复| F[静默，不发送任何消息]
+```
+
+回复策略完全由 workspace 的 CLAUDE.md 定义，框架不做过滤。
+
+---
+
+### 5.4 普通消息完整流程
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant FS as 飞书服务
+    participant WS as WS Client
+    participant Router as 消息路由器
+    participant DB as SQLite
+    participant Worker as Session Worker
+    participant Exec as Claude Executor
+    participant Claude as claude CLI
+
+    User->>FS: 发送消息（可含图片/文件）
+    FS->>WS: WS 推送 P2MessageReceiveV1
+    WS->>Router: 解析事件，构造 channel_key
+    Router->>DB: 查询活跃 session_id（用于确定附件存储路径）
+    Router->>FS: 下载附件（如有），保存到 session attachments/，替换路径
+    Router->>Worker: 入队（channel_key，携带替换后 prompt）
+
+    Worker->>FS: 发送"思考中..."卡片
+    Worker->>Exec: 执行（prompt, session_id, claude_session_id）
+    Exec->>Exec: 创建 sessions/<session-id>/ 目录（如不存在）\n写入 SESSION_CONTEXT.md
+    Exec->>Claude: 子进程\n-p prompt\n--cwd /workspaces/<app>/sessions/<session-id>/\n--resume claude_session_id（如有）\n--permission-mode acceptEdits\n--allowedTools ...
+
+    Claude-->>Exec: stream-json 输出（执行完成）
+    Exec->>Exec: 从 system 事件提取 claude_session_id（首次时）
+    Exec-->>Worker: 最终结果文本
+
+    Worker->>DB: 写入 messages 记录（含 sender_id）& 更新 claude_session_id
+    Worker->>FS: PATCH 卡片为最终结果
+```
+
+---
+
+### 5.5 /new 命令流程
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant FS as 飞书服务
+    participant Router as 消息路由器
+    participant Worker as Session Worker
+    participant DB as SQLite
+    participant Disk as 文件系统
+
+    User->>FS: 发送 /new
+    FS->>Router: WS 推送
+    Router->>Router: 识别 /new 命令
+    Router->>Worker: 入队（正常排队，不中断）
+
+    Worker->>DB: 将当前 session status 置为 archived
+    Worker->>DB: 生成新 session_id，claude_session_id 置空
+    Worker->>Disk: 创建 sessions/<new-session-id>/ 目录
+    Worker->>FS: 回复"已开启新会话"
+    Note over Worker: 下一条消息使用新 session_id 和新 session 目录\n不带 --resume，claude 创建全新 context
+```
+
+---
+
+### 5.6 任务创建流程（skill 写文件）
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant Claude as claude CLI
+    participant TaskDir as tasks/ 目录
+    participant Watcher as 文件 Watcher (fsnotify)
+    participant Scheduler as gocron 调度器
+    participant DB as SQLite
+
+    User->>Claude: "每天早上9点提醒我XXX"
+    Claude->>Claude: 调用 task skill
+    Claude->>TaskDir: 写入 tasks/<uuid>.yaml\n（含 app_id、cron、target、prompt 等）
+
+    TaskDir-->>Watcher: inotify CREATE 事件
+    Watcher->>DB: 写入 tasks 表（运行时镜像）
+    Watcher->>Scheduler: 注册 gocron Job
+    Claude-->>User: "已创建每日提醒任务"
+```
+
+**任务文件格式**（`tasks/<uuid>.yaml`）：
+
+```yaml
+id: "550e8400-e29b-41d4-a716-446655440000"
+app_id: "product-assistant"          # ← 必填，框架据此找 workspace
+name: "每日技术早报"
+cron: "0 9 * * 1-5"
+target_type: "p2p"                   # p2p / group
+target_id: "ou_xxx"                  # open_id 或 chat_id
+prompt: "请生成今日技术早报"
+created_by: "ou_xxx"
+created_at: "2026-03-05T09:00:00Z"
+enabled: true
+```
+
+- YAML 文件由 claude 按 task skill 规范写入，为 **source of truth**
+- 删除文件 → 注销任务（watcher 监听 DELETE 事件）
+- 修改文件 → 更新任务（watcher 监听 WRITE 事件）
+- 框架启动时全量扫描 `tasks/` 目录，恢复所有 enabled 任务
+
+---
+
+### 5.7 后台任务触发流程
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as gocron 调度器
+    participant Runner as Task Runner
+    participant DB as SQLite
+    participant Exec as Claude Executor
+    participant Claude as claude CLI
+    participant Sender as 飞书 Sender
+
+    Scheduler->>Scheduler: cron 触发
+    Scheduler->>Runner: 执行任务（含 app_id、target、prompt）
+    Runner->>DB: 查询或创建 target 的 channel & 活跃 session
+    Runner->>Exec: 执行 claude（prompt, session_id, claude_session_id）
+    Exec->>Claude: 子进程（--cwd session 目录，--resume 或新建）
+    Claude-->>Exec: 输出结果
+    Exec-->>Runner: 完整结果
+    Runner->>Sender: 主动推送消息到 target_id
+    Runner->>DB: 更新 last_run_at
+```
+
+---
+
+## 六、并发隔离
+
+### 两层隔离方案
+
+同一 app 下不同 session 并发执行时，通过两层隔离防止冲突：
+
+```mermaid
+graph TD
+    subgraph "workspaces/app-a/"
+        CLAUDE_MD["CLAUDE.md（只读）"]
+        SKILLS["skills/（只读）"]
+        MEMORY["memory/（共享，flock 保护）"]
+        TASKS_DIR["tasks/（claude 写，watcher 读）"]
+
+        subgraph "sessions/"
+            S1["session-abc/\n← --cwd\n写操作天然隔离"]
+            S2["session-xyz/\n← --cwd\n写操作天然隔离"]
+        end
+    end
+
+    S1 -->|向上读取| CLAUDE_MD & SKILLS
+    S2 -->|向上读取| CLAUDE_MD & SKILLS
+    S1 -->|flock 加锁后写| MEMORY
+    S2 -->|flock 加锁后写| MEMORY
+```
+
+| 目录 | 访问模式 | 隔离方式 |
+|---|---|---|
+| `CLAUDE.md` / `skills/` | 只读 | 无需锁 |
+| `memory/` | 多 session 共享写 | flock（每 app 一个 `.memory.lock`）|
+| `tasks/` | claude 写，watcher 读 | 每任务独立文件名，无冲突 |
+| `sessions/<id>/` | 单 session 独占写 | 目录级隔离，无需锁 |
+
+### 绝对路径注入
+
+框架在启动每个 claude 进程前，写入 `SESSION_CONTEXT.md` 到 session 目录，提供所有绝对路径：
+
+```markdown
+# Session Context
+- App ID: product-assistant
+- Workspace: /data/workspaces/product-assistant
+- Memory dir: /data/workspaces/product-assistant/memory
+- Memory lock: /data/workspaces/product-assistant/.memory.lock
+- Tasks dir: /data/workspaces/product-assistant/tasks
+- Session ID: abc-123
+- Session dir: /data/workspaces/product-assistant/sessions/abc-123
+- Attachments dir: /data/workspaces/product-assistant/sessions/abc-123/attachments
+```
+
+skill 中所有路径均来自此文件，不使用任何相对路径。
+
+---
+
+## 七、Workspace 目录结构
+
+```
+workspaces/<app-id>/
+├── CLAUDE.md                  # app 级共享配置（claude 向上读取）
+├── .memory.lock               # flock 锁文件（框架自动创建）
+├── skills/
+│   ├── feishu.md              # 飞书操作 skill
+│   ├── memory.md              # 长记忆 skill（含 flock 写入指南）
+│   └── task.md                # 定时任务 skill（tasks/*.yaml 格式规范）
+├── memory/                    # 长记忆（共享，flock 保护）
+├── tasks/                     # 定时任务配置（claude 写，watcher 监听）
+│   └── <uuid>.yaml
+└── sessions/
+    └── <session-id>/          # --cwd 指向这里
+        ├── SESSION_CONTEXT.md # 框架注入的绝对路径上下文
+        └── attachments/       # 附件（临时，定期清理）
+```
+
+---
+
+## 八、项目代码结构
+
+```
+cc-workspace-bot/
+├── cmd/
+│   └── server/main.go
+├── internal/
+│   ├── config/          # Viper 配置加载
+│   ├── app/             # 应用注册表（config → workspace 映射）
+│   ├── feishu/
+│   │   ├── receiver.go  # WS 事件解析、附件下载、分发
+│   │   └── sender.go    # 发消息、卡片 PATCH
+│   ├── session/
+│   │   ├── manager.go   # channel_key → Worker 映射（sync.Map）
+│   │   ├── worker.go    # 单 channel 串行执行 goroutine（含空闲超时）
+│   │   └── model.go     # Channel、Session、Message 数据模型
+│   ├── claude/
+│   │   └── executor.go  # 子进程调用、SESSION_CONTEXT.md 注入、stream-json 解析
+│   ├── workspace/
+│   │   └── init.go      # app/session 目录初始化（从模板复制）
+│   └── task/
+│       ├── watcher.go   # fsnotify 监听 tasks/ 目录变更
+│       ├── scheduler.go # gocron 调度器管理
+│       ├── runner.go    # 任务执行逻辑
+│       └── model.go     # Task 数据模型（对应 yaml 结构）
+├── workspaces/
+│   └── _template/       # 默认 workspace 初始化模板
+│       ├── CLAUDE.md
+│       └── skills/
+│           ├── feishu.md
+│           ├── memory.md  # 含 flock 写入指南和绝对路径用法
+│           └── task.md    # tasks/*.yaml 格式规范
+├── config.yaml
+└── bot.db
+```
+
+---
+
+## 九、应用配置（config.yaml）
+
+```yaml
+apps:
+  - id: "product-assistant"
+    feishu_app_id: "cli_xxx"
+    feishu_app_secret: "xxx"
+    feishu_verification_token: "xxx"
+    feishu_encrypt_key: ""
+    workspace_dir: "/data/workspaces/product-assistant"
+    allowed_chats: []                  # 空表示不限制
+    claude:
+      permission_mode: "acceptEdits"   # acceptEdits / bypassPermissions
+      allowed_tools:                   # 空表示不限制
+        - "Bash"
+        - "Read"
+        - "Edit"
+        - "Write"
+        - "mcp__feishu"
+
+  - id: "code-review"
+    feishu_app_id: "cli_yyy"
+    feishu_app_secret: "yyy"
+    workspace_dir: "/data/workspaces/code-review"
+    allowed_chats:
+      - "oc_abc123"
+    claude:
+      permission_mode: "acceptEdits"
+      allowed_tools:
+        - "Read"
+        - "Bash"
+        - "mcp__gitlab"
+
+server:
+  port: 8080
+
+claude:
+  timeout_minutes: 5
+  max_turns: 20
+
+session:
+  worker_idle_timeout_minutes: 30    # Worker 空闲超时，触发 session 归档
+
+cleanup:
+  attachments_retention_days: 7     # session 归档后附件保留天数
+  attachments_max_days: 30          # 强制清理天数上限
+  schedule: "0 2 * * *"             # 每天凌晨 2 点执行
+```
+
+---
+
+## 十、附件清理机制
+
+```mermaid
+flowchart TD
+    A["Session 归档事件\n（/new 命令 或 Worker 空闲超时）"]
+    A --> B[记录归档时间到 sessions.updated_at]
+
+    C["每日定时任务（凌晨 2:00）"]
+    C --> D{扫描所有 session 附件目录}
+    D --> E{"已归档 且 超过\nretention_days（默认 7 天）?"}
+    E -->|是| F["删除 sessions/<id>/attachments/ 目录"]
+    E -->|否| G[跳过]
+    D --> H{"created_at 超过\nmax_days（默认 30 天）?"}
+    H -->|是| F
+    H -->|否| G
+```
+
+清理范围：仅删除 `attachments/` 目录；`SESSION_CONTEXT.md` 随 session 目录一同清理；SQLite 中的 session / message 记录永久保留。
+
+---
+
+## 十一、全部设计决策汇总
+
+| 决策点 | 结论 |
+|---|---|
+| CLAUDE.md 向上查找 | 利用，不隔断；父目录可放全局配置 |
+| 并发隔离 | `--cwd` 指向 session 目录；memory/ 用 flock 加锁 |
+| 绝对路径 | 框架注入 SESSION_CONTEXT.md，skill 全用绝对路径 |
+| Context 管理 | `--resume` 复用 claude session；`/new` 时不传 --resume |
+| 群聊触发 | 所有消息触发，claude 自行判断是否回复 |
+| 文件/图片 | 下载到 session/attachments/，替换为绝对路径传给 claude |
+| 结果展示 | 方案 A：仅展示最终结果，一次性 PATCH 卡片 |
+| 任务创建 | claude 通过 task skill 直接写 tasks/*.yaml，框架 watch 注册 |
+| 并发写锁 | memory/ 用 flock；task 文件独立文件名无冲突 |
+| 附件清理 | 两级清理：归档后 7 天 + 最大 30 天强制清理 |
+| Worker 超时 | 空闲 30 分钟自动退出，触发 session 归档 |
+| 数据持久化 | SQLite；task YAML 文件为 source of truth，DB 为运行时镜像 |
