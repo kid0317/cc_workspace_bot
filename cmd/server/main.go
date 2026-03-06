@@ -118,6 +118,11 @@ func main() {
 		restoreEnabledTasks(ctx, database, appCfg.ID, taskScheduler)
 	}
 
+	if _, err := task.NewCleaner(database, cfg.Apps, cfg.Cleanup, taskScheduler); err != nil {
+		slog.Error("register cleanup job", "err", err)
+		os.Exit(1)
+	}
+
 	taskScheduler.Start()
 	taskWatcher.Start(ctx)
 

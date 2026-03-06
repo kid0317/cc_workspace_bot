@@ -72,6 +72,23 @@ func (s *Scheduler) Add(ctx context.Context, task *model.Task) error {
 	return nil
 }
 
+// AddFunc registers a named cron function not tied to a model.Task.
+func (s *Scheduler) AddFunc(name, cronExpr string, fn func()) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.inner.NewJob(
+		gocron.CronJob(cronExpr, false),
+		gocron.NewTask(fn),
+		gocron.WithName(name),
+	)
+	if err != nil {
+		return fmt.Errorf("add func job %q: %w", name, err)
+	}
+	slog.Info("task scheduler: registered func job", "name", name, "cron", cronExpr)
+	return nil
+}
+
 // Remove unregisters the job for the given task ID.
 func (s *Scheduler) Remove(taskID string) {
 	s.mu.Lock()
