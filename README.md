@@ -317,10 +317,23 @@ claude CLI（cmd.Dir = sessions/<session-id>/，--resume 复用 context）
 
 ## 前置要求
 
+> **核心前提**：本项目运行在**已安装并登录 Claude Code 的机器**上。服务端每次处理消息时，都会在该机器上以子进程方式调用 `claude` CLI，因此 Claude Code 的安装、认证和订阅缺一不可。
+
+**安装 Claude Code**（如尚未安装）：
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude  # 首次运行，按提示完成 Anthropic 账号认证
+```
+
+详见 [Claude Code 官方文档](https://docs.anthropic.com/claude-code)。
+
+---
+
 | 组件 | 版本要求 | 说明 |
 |------|---------|------|
+| Claude Code | 最新版 | 服务端核心依赖，须已认证登录（`claude` 命令可用）|
 | Go | 1.23+ | 编译服务端代码 |
-| Claude CLI | 最新版 | `claude` 命令须在 `$PATH` 中，并已完成认证 |
 | Python | 3.9+ | 飞书 ops 脚本依赖（`requests` 库）|
 | 飞书企业账号 | — | 需创建企业自建应用并开启 WS 模式 |
 
