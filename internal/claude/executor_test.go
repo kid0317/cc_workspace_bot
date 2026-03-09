@@ -89,6 +89,29 @@ func TestInjectRoutingContext(t *testing.T) {
 	})
 }
 
+func TestExpandModelAlias(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"haiku", "claude-haiku-4-5-20251001"},
+		{"HAIKU", "claude-haiku-4-5-20251001"},
+		{"sonnet", "claude-sonnet-4-6"},
+		{"Sonnet", "claude-sonnet-4-6"},
+		{"opus", "claude-opus-4-6"},
+		// Full IDs pass through unchanged.
+		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"},
+		{"unknown-model", "unknown-model"},
+	}
+	for _, tt := range tests {
+		got := expandModelAlias(tt.input)
+		if got != tt.want {
+			t.Errorf("expandModelAlias(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestResolveModel(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -100,13 +123,13 @@ func TestResolveModel(t *testing.T) {
 			name:        "app-level model takes priority over global",
 			appModel:    "opus",
 			globalModel: "haiku",
-			want:        "opus",
+			want:        "claude-opus-4-6",
 		},
 		{
 			name:        "falls back to global when app model is empty",
 			appModel:    "",
 			globalModel: "sonnet",
-			want:        "sonnet",
+			want:        "claude-sonnet-4-6",
 		},
 		{
 			name:        "returns empty when both unset",
@@ -118,19 +141,19 @@ func TestResolveModel(t *testing.T) {
 			name:        "trims whitespace from app model",
 			appModel:    "  sonnet  ",
 			globalModel: "opus",
-			want:        "sonnet",
+			want:        "claude-sonnet-4-6",
 		},
 		{
 			name:        "whitespace-only app model falls back to global",
 			appModel:    "   ",
 			globalModel: "haiku",
-			want:        "haiku",
+			want:        "claude-haiku-4-5-20251001",
 		},
 		{
 			name:        "trims whitespace from global model",
 			appModel:    "",
 			globalModel: "  opus  ",
-			want:        "opus",
+			want:        "claude-opus-4-6",
 		},
 		{
 			name:        "full model ID accepted",
@@ -171,7 +194,7 @@ func TestBuildArgs_Model(t *testing.T) {
 		e := &Executor{cfg: cfg}
 		req := &ExecuteRequest{AppConfig: baseApp}
 		args := e.buildArgs("hi", req, "/tmp/session")
-		assertHasFlag(t, args, "--model", "sonnet")
+		assertHasFlag(t, args, "--model", "claude-sonnet-4-6")
 	})
 
 	t.Run("--model flag present when app model set", func(t *testing.T) {
@@ -184,7 +207,7 @@ func TestBuildArgs_Model(t *testing.T) {
 		e := &Executor{cfg: baseCfg}
 		req := &ExecuteRequest{AppConfig: appCfg}
 		args := e.buildArgs("hi", req, "/tmp/session")
-		assertHasFlag(t, args, "--model", "opus")
+		assertHasFlag(t, args, "--model", "claude-opus-4-6")
 	})
 
 	t.Run("app model overrides global in args", func(t *testing.T) {
@@ -200,7 +223,7 @@ func TestBuildArgs_Model(t *testing.T) {
 		e := &Executor{cfg: cfg}
 		req := &ExecuteRequest{AppConfig: appCfg}
 		args := e.buildArgs("hi", req, "/tmp/session")
-		assertHasFlag(t, args, "--model", "opus")
+		assertHasFlag(t, args, "--model", "claude-opus-4-6")
 	})
 
 	t.Run("no --model flag when both unset", func(t *testing.T) {

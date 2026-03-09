@@ -46,6 +46,7 @@ type Receiver struct {
 	appCfg     *config.AppConfig
 	client     *lark.Client
 	dispatcher Dispatcher
+	sender     *Sender
 	wsClient   *larkws.Client
 }
 
@@ -56,6 +57,7 @@ func NewReceiver(appCfg *config.AppConfig, dispatcher Dispatcher) *Receiver {
 		appCfg:     appCfg,
 		client:     client,
 		dispatcher: dispatcher,
+		sender:     NewSender(client),
 	}
 }
 
@@ -69,7 +71,9 @@ func (r *Receiver) Start(ctx context.Context) error {
 	eventHandler := dispatcher.NewEventDispatcher(
 		r.appCfg.FeishuVerificationToken,
 		r.appCfg.FeishuEncryptKey,
-	).OnP2MessageReceiveV1(r.handleMessage)
+	).OnP2MessageReceiveV1(r.handleMessage).
+		OnP2ChatMemberBotAddedV1(r.handleBotAddedToGroup).
+		OnP2ChatMemberUserAddedV1(r.handleUserAddedToGroup)
 
 	r.wsClient = larkws.NewClient(
 		r.appCfg.FeishuAppID,
@@ -329,6 +333,103 @@ func extractPostText(content string) string {
 		sb.WriteString("\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// handleBotAddedToGroup generates a Claude welcome when the bot is added to a group.
+func (r *Receiver) handleBotAddedToGroup(ctx context.Context, event *larkim.P2ChatMemberBotAddedV1) error {
+	if event.Event == nil || event.Event.ChatId == nil {
+		return nil
+	}
+	chatID := safeStr(event.Event.ChatId)
+	if !r.appCfg.AllowedChat(chatID) {
+		return nil
+	}
+	groupName := safeStr(event.Event.Name)
+	if groupName == "" {
+		groupName = "本群"
+	}
+	msg := &IncomingMessage{
+		AppID:       r.appCfg.ID,
+		ChannelKey:  buildChannelKey("group", chatID, "", r.appCfg.ID),
+		ChatType:    "group",
+		ChatID:      chatID,
+		ReceiveID:   chatID,
+		ReceiveType: "chat_id",
+		Prompt: fmt.Sprintf(
+			"你刚刚被添加到飞书群「%s」。请阅读 CLAUDE.md 了解你的角色定位，用中文写一条自我介绍欢迎消息，告诉群成员你是谁、能做什么、如何开始使用。直接输出消息内容，不要调用任何工具。",
+			groupName,
+		),
+	}
+	if err := r.dispatcher.Dispatch(ctx, msg); err != nil {
+		slog.Warn("feishu: dispatch welcome on bot added", "chat_id", chatID, "err", err)
+		if _, err2 := r.sender.SendCard(ctx, chatID, "chat_id", botAddedWelcome(r.appCfg.ID, safeStr(event.Event.Name))); err2 != nil {
+			slog.Warn("feishu: welcome fallback failed", "chat_id", chatID, "err", err2)
+		}
+	}
+	return nil
+}
+
+// handleUserAddedToGroup generates a Claude welcome when new users join a group.
+func (r *Receiver) handleUserAddedToGroup(ctx context.Context, event *larkim.P2ChatMemberUserAddedV1) error {
+	if event.Event == nil || event.Event.ChatId == nil {
+		return nil
+	}
+	chatID := safeStr(event.Event.ChatId)
+	if !r.appCfg.AllowedChat(chatID) {
+		return nil
+	}
+	var names []string
+	for _, u := range event.Event.Users {
+		if u.Name != nil && *u.Name != "" {
+			names = append(names, *u.Name)
+		}
+	}
+	nameStr := "新成员"
+	if len(names) > 0 {
+		nameStr = strings.Join(names, "、")
+	}
+	msg := &IncomingMessage{
+		AppID:       r.appCfg.ID,
+		ChannelKey:  buildChannelKey("group", chatID, "", r.appCfg.ID),
+		ChatType:    "group",
+		ChatID:      chatID,
+		ReceiveID:   chatID,
+		ReceiveType: "chat_id",
+		Prompt: fmt.Sprintf(
+			"「%s」刚刚加入了群组。请用中文写一条欢迎新成员的消息，热情迎接，并简单介绍你能为他们提供什么帮助。直接输出消息内容，不要调用任何工具。",
+			nameStr,
+		),
+	}
+	if err := r.dispatcher.Dispatch(ctx, msg); err != nil {
+		slog.Warn("feishu: dispatch welcome on user added", "chat_id", chatID, "err", err)
+		if _, err2 := r.sender.SendCard(ctx, chatID, "chat_id", userAddedWelcome(r.appCfg.ID, names)); err2 != nil {
+			slog.Warn("feishu: welcome fallback failed", "chat_id", chatID, "err", err2)
+		}
+	}
+	return nil
+}
+
+// botAddedWelcome returns the welcome message sent when the bot is added to a group.
+func botAddedWelcome(appID, groupName string) string {
+	if groupName == "" {
+		groupName = "本群"
+	}
+	return fmt.Sprintf(
+		"👋 大家好，我是 **%s** AI 助理，很高兴加入 **%s**！\n\n**我能做什么：**\n• 💬 回答问题、撰写内容、分析数据\n• 🖼️ 阅读图片和文件\n• ⏰ 创建定时任务自动执行\n\n直接发消息给我即可开始，输入 `/new` 可开启全新会话。",
+		appID, groupName,
+	)
+}
+
+// userAddedWelcome returns the welcome message sent when users join a group.
+func userAddedWelcome(appID string, names []string) string {
+	nameStr := "新成员"
+	if len(names) > 0 {
+		nameStr = strings.Join(names, "、")
+	}
+	return fmt.Sprintf(
+		"👋 欢迎 **%s** 加入！我是本群的 AI 助理 **%s**，有任何问题都可以直接找我聊。",
+		nameStr, appID,
+	)
 }
 
 func safeStr(p *string) string {

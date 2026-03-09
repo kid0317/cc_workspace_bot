@@ -297,12 +297,35 @@ func permissionMode(appCfg *config.AppConfig) string {
 	return "acceptEdits"
 }
 
+// modelAliases maps short names to full Claude model IDs.
+// The claude CLI only accepts "sonnet" and "opus" as built-in aliases;
+// "haiku" must be expanded here before being passed to --model.
+var modelAliases = map[string]string{
+	"haiku":  "claude-haiku-4-5-20251001",
+	"sonnet": "claude-sonnet-4-6",
+	"opus":   "claude-opus-4-6",
+}
+
+// expandModelAlias expands a short alias to the full model ID.
+// Unknown values are returned as-is (full IDs pass through unchanged).
+func expandModelAlias(m string) string {
+	if full, ok := modelAliases[strings.ToLower(m)]; ok {
+		return full
+	}
+	return m
+}
+
 // resolveModel returns the effective model for this request.
 // App-level setting takes priority over the global default.
+// Short aliases (haiku/sonnet/opus) are expanded to full model IDs.
 // Returns empty string when neither is set (claude uses its built-in default).
 func resolveModel(appCfg *config.AppConfig, cfg *config.Config) string {
-	if m := strings.TrimSpace(appCfg.Claude.Model); m != "" {
-		return m
+	m := strings.TrimSpace(appCfg.Claude.Model)
+	if m == "" {
+		m = strings.TrimSpace(cfg.Claude.Model)
 	}
-	return strings.TrimSpace(cfg.Claude.Model)
+	if m == "" {
+		return ""
+	}
+	return expandModelAlias(m)
 }

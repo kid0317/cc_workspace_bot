@@ -65,8 +65,8 @@ cc-workspace-bot/
 │   ├── claude/
 │   │   └── executor.go         # 子进程调用 claude CLI，stream-json 解析
 │   ├── feishu/
-│   │   ├── receiver.go         # WS 事件解析、附件下载、Dispatcher 接口
-│   │   └── sender.go           # 发送卡片（SendThinking/UpdateCard/SendText）
+│   │   ├── receiver.go         # WS 事件解析、附件下载、欢迎事件处理、Dispatcher 接口
+│   │   └── sender.go           # 发送卡片（SendCard/SendThinking/UpdateCard/SendText）
 │   ├── session/
 │   │   ├── manager.go          # channel_key → Worker 懒启动映射（sync.Map + WaitGroup）
 │   │   └── worker.go           # 单 channel 串行队列、/new 命令、空闲超时归档
@@ -94,8 +94,8 @@ cc-workspace-bot/
 
 ```
 飞书用户
-  → 飞书 WS 推送（P2MessageReceiveV1）
-  → feishu.Receiver（解析消息 / 下载附件）
+  → 飞书 WS 推送（P2MessageReceiveV1 / ChatMemberBotAdded / ChatMemberUserAdded / BotP2pChatEntered）
+  → feishu.Receiver（解析消息 / 下载附件 / 欢迎事件直接回复）
   → session.Manager.Dispatch()
   → session.Worker（按 channel_key 串行队列）
   → claude.Executor（子进程 claude CLI，stream-json）
@@ -121,7 +121,33 @@ cc-workspace-bot/
 | 内存共享写 | workspace `memory/` 目录用 flock 加锁（skill 层实现）|
 | 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker 完成后再退出 |
 
-## Configuration
+## Development Workflow
+
+每次新功能开发必须按以下顺序进行，不可跳步：
+
+### 1. 设计（Design）
+- 阅读 `docs/design.md` 了解现有架构
+- 在 `docs/design.md` 中写明新功能的数据流、接口、决策点（或确认与现有架构无冲突）
+
+### 2. 开发（Implement）
+- 优先扩展已有函数/方法，避免新建不必要的文件
+- 将核心逻辑提取为纯函数，便于测试
+
+### 3. 测试（Test）
+```bash
+go build ./...          # 必须编译通过
+go test ./... -cover    # 所有现有测试必须通过；新代码需补单测
+go vet ./...            # 无警告
+```
+- 针对新增纯函数写表驱动单测
+- handler 类代码需测试边界（nil、空值、AllowedChat 过滤）
+
+### 4. 更新文档（Update Docs）
+- `docs/design.md`：补充或修订数据流时序图、设计决策汇总
+- `README.md`：如有用户可见的新特性，更新核心特性表
+- `CLAUDE.md`（本文件）：如有架构变化，同步更新 Architecture / Key Concepts
+
+---
 
 所有配置通过 `config.yaml` 加载（Viper），**不使用环境变量**：
 
@@ -141,7 +167,7 @@ apps:
         - "Read"
         - "Edit"
         - "Write"
-      # model: "sonnet"   # 覆盖全局默认模型（可选）
+      # model: "claude-sonnet-4-6"   # 覆盖全局默认模型（可选）；sonnet/opus 别名有效，haiku 需用完整 ID: claude-haiku-4-5-20251001
 
 server:
   port: 8080
@@ -149,7 +175,7 @@ server:
 claude:
   timeout_minutes: 5
   max_turns: 20
-  # model: "sonnet"   # 全局默认模型；别名: sonnet/opus/haiku，或完整 ID: claude-sonnet-4-6
+  # model: "claude-sonnet-4-6"   # 全局默认模型；sonnet/opus 别名有效，haiku 需用完整 ID: claude-haiku-4-5-20251001
 
 session:
   worker_idle_timeout_minutes: 30   # Worker 空闲超时

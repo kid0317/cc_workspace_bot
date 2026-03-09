@@ -64,9 +64,9 @@ func buildCard(text string) (string, error) {
 	return string(b), nil
 }
 
-// SendThinking sends an initial "thinking..." interactive card and returns the card message ID.
-func (s *Sender) SendThinking(ctx context.Context, receiveID string, receiveIDType string) (string, error) {
-	cardJSON, err := buildCard("⏳ 思考中...")
+// SendCard sends an interactive card message and returns the card message ID.
+func (s *Sender) SendCard(ctx context.Context, receiveID, receiveIDType, text string) (string, error) {
+	cardJSON, err := buildCard(text)
 	if err != nil {
 		return "", err
 	}
@@ -82,16 +82,21 @@ func (s *Sender) SendThinking(ctx context.Context, receiveID string, receiveIDTy
 
 	resp, err := s.client.Im.Message.Create(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("send thinking card: %w", err)
+		return "", fmt.Errorf("send card: %w", err)
 	}
 	if !resp.Success() {
-		return "", fmt.Errorf("send thinking card API error: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("send card API error: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 
 	if resp.Data != nil && resp.Data.MessageId != nil {
 		return *resp.Data.MessageId, nil
 	}
 	return "", nil
+}
+
+// SendThinking sends an initial "thinking..." interactive card and returns the card message ID.
+func (s *Sender) SendThinking(ctx context.Context, receiveID string, receiveIDType string) (string, error) {
+	return s.SendCard(ctx, receiveID, receiveIDType, "⏳ 思考中...")
 }
 
 // UpdateCard patches an existing interactive card with new text.

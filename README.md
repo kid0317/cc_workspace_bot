@@ -58,6 +58,7 @@
 |------|------|
 | **多应用隔离** | 每个飞书应用对应独立 workspace，session 级目录隔离并发写操作 |
 | **智能会话管理** | 单聊 / 群聊 / 话题群，自动维护 Claude context，`/new` 开启新会话 |
+| **欢迎引导** | Bot 入群、用户加入群组、首次打开单聊时自动发送欢迎卡片介绍助手能力 |
 | **长期记忆** | 跨 session 共享记忆，flock 文件锁保障并发安全 |
 | **定时任务** | 对话式创建 cron 任务，fsnotify 自动注册，YAML 为 source of truth |
 | **附件支持** | 图片、文件自动下载至 session 目录，替换为绝对路径供 Claude 读取 |
@@ -71,11 +72,12 @@
 
 ```
 飞书用户
-  ↓ 发送消息（文本 / 图片 / 文件）
+  ↓ 发送消息（文本 / 图片 / 文件）或触发入群/单聊事件
 飞书 WebSocket 长连接
-  ↓ P2MessageReceiveV1 事件推送
+  ↓ 事件推送（消息 / 欢迎事件）
 消息路由器（解析消息类型 + 下载附件到 TempDir）
-  ↓ 按 channel_key 分发到对应队列
+  ↓ 欢迎事件（Bot 入群 / 用户入群 / P2P 首次打开）→ 直接发卡片
+  ↓ 普通消息：按 channel_key 分发到对应队列
 Session Worker（每个 channel_key 对应一个串行队列）
   ↓ moveAttachments() → 发送「思考中」卡片
 Claude Executor

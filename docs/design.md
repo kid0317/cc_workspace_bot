@@ -392,6 +392,42 @@ sequenceDiagram
 
 ---
 
+### 5.8 欢迎事件流程
+
+Bot 被加入群组、用户加入群组、用户首次打开单聊时，`feishu.Receiver` 直接发送欢迎卡片，**不经过** Session Worker / Claude Executor。
+
+```mermaid
+sequenceDiagram
+    participant FS as 飞书服务
+    participant Recv as feishu.Receiver
+    participant Sender as feishu.Sender
+
+    Note over FS,Recv: 场景一：Bot 被拉入群组
+    FS->>Recv: P2ChatMemberBotAddedV1 (chat_id, name)
+    Recv->>Recv: AllowedChat 检查
+    Recv->>Sender: SendCard(chat_id, 自我介绍 + 功能说明)
+    Sender->>FS: 发卡片消息到群
+
+    Note over FS,Recv: 场景二：新用户加入群组
+    FS->>Recv: P2ChatMemberUserAddedV1 (chat_id, users[])
+    Recv->>Recv: AllowedChat 检查 + 提取用户姓名列表
+    Recv->>Sender: SendCard(chat_id, 欢迎新成员 + 介绍 Bot)
+    Sender->>FS: 发卡片消息到群
+
+    Note over FS,Recv: 场景三：用户首次打开单聊（仅首次触发）
+    FS->>Recv: P2ChatAccessEventBotP2pChatEnteredV1 (operator_id.open_id)
+    Recv->>Sender: SendCard(open_id, 自我介绍 + 功能说明)
+    Sender->>FS: 发卡片消息给用户
+```
+
+**设计说明：**
+- 欢迎事件无需 AI 推理，直接由框架层返回固定欢迎语，绕过 Claude 执行链
+- 消息内容由纯函数 `botAddedWelcome` / `userAddedWelcome` / `p2pWelcome` 生成，便于单测
+- `P2pChatEntered` 仅在首次建立会话时触发，不会重复发送
+- 所有群事件均遵守 `allowed_chats` 访问控制
+
+---
+
 ## 六、并发隔离
 
 ### 两层隔离方案
@@ -507,8 +543,8 @@ cc-workspace-bot/
 │   ├── db/
 │   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
 │   ├── feishu/
-│   │   ├── receiver.go         # WS 事件解析、附件下载到 TempDir、Dispatcher 接口
-│   │   └── sender.go           # SendThinking / UpdateCard / SendText
+│   │   ├── receiver.go         # WS 事件解析、附件下载到 TempDir、欢迎事件处理、Dispatcher 接口
+│   │   └── sender.go           # SendCard / SendThinking / UpdateCard / SendText
 │   ├── session/
 │   │   ├── manager.go          # channel_key → Worker 懒启动（sync.Map + WaitGroup）
 │   │   └── worker.go           # 串行队列、/new、空闲超时、moveAttachments
@@ -636,6 +672,7 @@ flowchart TD
 | 数据持久化 | SQLite WAL；task YAML 文件为 source of truth，DB 为运行时镜像 | `db/db.go`，`glebarez/sqlite` |
 | 初始化循环依赖 | `dispatchForwarder` + `atomic.Pointer` | `cmd/server/main.go` |
 | 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker；HTTP Shutdown(10s) | `session/manager.go:Wait()` |
+| 欢迎事件 | Bot 入群 / 用户入群 / P2P 首次打开时直接发欢迎卡片；绕过 Session Worker | `feishu/receiver.go:handleBotAddedToGroup` 等 |
 | HTTP 安全 | ReadHeaderTimeout=5s / ReadTimeout=10s / WriteTimeout=10s / IdleTimeout=60s | `cmd/server/main.go:httpServer` |
 | HTTP 健康检查 | `GET /health` → 200 OK | `cmd/server/main.go` |
 | 附件大小限制 | 100 MiB per file（`io.LimitReader`）| `feishu/receiver.go:saveBody` |
