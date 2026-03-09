@@ -61,7 +61,7 @@
 | **多应用隔离** | 每个飞书应用对应独立 workspace，session 级目录隔离并发写操作 |
 | **智能会话管理** | 单聊 / 群聊 / 话题群，自动维护 Claude context，`/new` 开启新会话 |
 | **欢迎引导** | Bot 入群、用户加入群组、首次打开单聊时自动发送欢迎卡片介绍助手能力 |
-| **长期记忆** | 跨 session 共享记忆，flock 文件锁保障并发安全 |
+| **长期记忆** | 跨 session 共享记忆，filelock 工具保障跨平台并发安全 |
 | **定时任务** | 对话式创建 cron 任务，fsnotify 自动注册，YAML 为 source of truth |
 | **附件支持** | 图片、文件自动下载至 session 目录，替换为绝对路径供 Claude 读取 |
 | **飞书全集成** | 发消息、读写文档/表格/多维表格、管理日历、查询群成员（18 个 Python 脚本）|
@@ -411,7 +411,7 @@ git --version
 
 ### 安装 Go 环境
 
-> 如果已安装 Go 1.23+（`go version` 验证），可跳过此步骤。
+> 如果已安装 Go 1.24+（`go version` 验证），可跳过此步骤。
 
 #### macOS
 
@@ -425,12 +425,12 @@ git --version
 brew install go
 
 # 验证
-go version  # 应输出 go1.23.x 或更高版本
+go version  # 应输出 go1.24.x 或更高版本
 ```
 
 **方式二：官方安装包**
 
-1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.23.x.darwin-arm64.pkg`（Apple Silicon）或 `go1.23.x.darwin-amd64.pkg`（Intel）
+1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.24.x.darwin-arm64.pkg`（Apple Silicon）或 `go1.24.x.darwin-amd64.pkg`（Intel）
 2. 双击 `.pkg` 文件，按向导完成安装（默认安装到 `/usr/local/go`）
 3. 打开新终端验证：
 
@@ -446,11 +446,11 @@ go version
 
 ```bash
 # 下载（以 amd64 为例，ARM 替换为 linux-arm64）
-curl -LO https://go.dev/dl/go1.23.8.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.24.8.linux-amd64.tar.gz
 
 # 解压到 /usr/local（会覆盖旧版本）
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.23.8.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.24.8.linux-amd64.tar.gz
 
 # 配置 PATH（写入 ~/.bashrc 或 ~/.zshrc）
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
@@ -479,7 +479,7 @@ sudo dnf install -y golang
 
 **方式一：官方安装包（推荐）**
 
-1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.23.x.windows-amd64.msi`
+1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.24.x.windows-amd64.msi`
 2. 双击运行安装程序，一路「Next」完成安装（默认安装到 `C:\Program Files\Go`）
 3. 安装程序会自动配置 `PATH`，打开新的 PowerShell 或命令提示符验证：
 
@@ -510,7 +510,7 @@ winget install GoLang.Go
 go version
 ```
 
-> Windows 用户建议使用 **Git Bash** 或 **WSL2**（Ubuntu）运行后续 Shell 脚本（`start.sh`、`init_workspace.sh`），PowerShell 也可直接运行 `go` 命令。
+> Windows 用户建议使用 **Git Bash** 或 **WSL2**（Ubuntu）运行后续 Shell 脚本（`start.sh`、`init_workspace.sh`），PowerShell 也可直接运行 `go` 命令。项目已完全支持 Windows 平台。
 
 ---
 
@@ -871,13 +871,14 @@ workspaces/<app-id>/
 
 | 组件 | 选型 | 说明 |
 |------|------|------|
-| 语言 | Go 1.23 | 高并发、低内存占用 |
+| 语言 | Go 1.24+ | 高并发、低内存占用、跨平台（Linux/macOS/Windows）|
 | 飞书 SDK | oapi-sdk-go/v3 | 官方 SDK，WS 模式无需公网 IP |
 | 数据库 | SQLite WAL | CGO-free，单机部署零依赖 |
 | ORM | GORM | AutoMigrate，快速开发 |
 | 配置 | Viper | YAML 配置加载与校验 |
 | 定时任务 | gocron/v2 | 简洁的 cron 调度器 |
 | 文件监听 | fsnotify | 跨平台 inotify 封装 |
+| 文件锁 | gofrs/flock | 跨平台文件锁（替代 Unix flock 命令）|
 | AI 引擎 | Claude CLI (claude) | 子进程调用，stream-json 输出 |
 | 飞书操作 | Python + requests | 18 个独立脚本，凭证文件读取 |
 

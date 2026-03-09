@@ -20,20 +20,33 @@ SESSION_CONTEXT.md 中包含：
 - Memory lock: /data/workspaces/<app>/.memory.lock
 ```
 
-### 写入流程（使用 flock 防并发冲突）
+### 写入流程（使用 filelock 防并发冲突）
 
 ```bash
-# 1. 获取锁
-flock -x <memory_lock_path> -c "
-  # 2. 读取现有 memory 文件
-  cat <memory_dir>/user_profile.md 2>/dev/null
+# 使用 filelock 工具（跨平台，支持 Linux/macOS/Windows）
+# 语法: filelock <lock-file> <timeout-seconds> <command> [args...]
 
-  # 3. 写入更新内容（追加或覆盖）
-  cat >> <memory_dir>/user_profile.md << 'EOF'
-  ...新内容...
-  EOF
+# 示例 1: 追加内容到 memory 文件
+filelock <memory_lock_path> 10 bash -c "
+  echo '新内容' >> <memory_dir>/user_profile.md
+"
+
+# 示例 2: 读取后更新
+filelock <memory_lock_path> 10 bash -c "
+  cat <memory_dir>/user_profile.md 2>/dev/null
+  echo '更新内容' >> <memory_dir>/user_profile.md
+"
+
+# Windows PowerShell 示例:
+filelock <memory_lock_path> 10 powershell -Command "
+  Add-Content -Path '<memory_dir>/user_profile.md' -Value '新内容'
 "
 ```
+
+**参数说明**：
+- `<lock-file>`: 锁文件路径（从 SESSION_CONTEXT.md 读取）
+- `<timeout-seconds>`: 等待锁的超时时间（秒），0 表示无限等待
+- `<command>`: 要执行的命令
 
 ### 文件组织建议
 
@@ -56,6 +69,7 @@ cat <memory_dir>/project_context.md 2>/dev/null
 
 ## 注意事项
 
-- memory 文件由多个 session 共享，写入前必须加 flock 锁
+- memory 文件由多个 session 共享，写入前必须使用 filelock 工具加锁
+- filelock 工具位于项目根目录，跨平台支持 Linux/macOS/Windows
 - 使用增量更新，不要覆盖整个文件（除非明确重置）
 - 敏感信息（密码、密钥）**不写入 memory**

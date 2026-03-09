@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/kid0317/cc-workspace-bot/internal/config"
@@ -74,7 +73,7 @@ func (e *Executor) Execute(ctx context.Context, req *ExecuteRequest) (*ExecuteRe
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = sessionDir
 	cmd.WaitDelay = 30 * time.Second
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcAttrs(cmd)
 	// Add provider/model/auth env vars when configured.
 	providerName, pc := resolveProvider(req.AppConfig, e.cfg)
 	claudeEnvVars := buildClaudeEnvVars(providerName, pc)
