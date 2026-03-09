@@ -1,6 +1,7 @@
 # CC Workspace Bot
 
 > 企业级飞书 AI 助理平台，基于 Claude Code CLI 构建的多场景智能助手框架。
+> 个人微信: bmagician ,欢迎添加讨论.
 
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
