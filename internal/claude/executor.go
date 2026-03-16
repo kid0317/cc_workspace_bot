@@ -57,7 +57,7 @@ func (e *Executor) Execute(ctx context.Context, req *ExecuteRequest) (*ExecuteRe
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
-	if err := writeSessionContext(sessionDir, req); err != nil {
+	if err := writeSessionContext(sessionDir, req, e.cfg.DBPath); err != nil {
 		return nil, fmt.Errorf("write session context: %w", err)
 	}
 
@@ -78,10 +78,11 @@ func (e *Executor) Execute(ctx context.Context, req *ExecuteRequest) (*ExecuteRe
 	providerName, pc := resolveProvider(req.AppConfig, e.cfg)
 	claudeEnvVars := buildClaudeEnvVars(providerName, pc)
 
-	// Filter out ANTHROPIC_* vars from inherited env to prevent conflicts.
-	// On Linux, duplicate env keys cause getenv() to return the first match,
-	// so we must remove old values before appending new ones.
-	baseEnv := os.Environ()
+	// Filter out vars from inherited env to prevent conflicts.
+	// - ANTHROPIC_*: duplicate keys cause getenv() to return the first match
+	// - CLAUDECODE/CLAUDE_CODE_*: prevent nested-session detection when the
+	//   server itself was launched from within a Claude CLI session
+	baseEnv := filterEnv(filterEnv(os.Environ(), "CLAUDECODE"), "CLAUDE_CODE_")
 	if len(claudeEnvVars) > 0 {
 		baseEnv = filterEnv(baseEnv, "ANTHROPIC_")
 	}
@@ -145,7 +146,13 @@ func (e *Executor) Execute(ctx context.Context, req *ExecuteRequest) (*ExecuteRe
 		if ctx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("claude timed out after %d minutes", e.cfg.Claude.TimeoutMinutes)
 		}
-		slog.Warn("claude exited with error", "err", err, "stderr", strings.Join(stderrLines, "\n"))
+		stderrStr := strings.Join(stderrLines, "\n")
+		slog.Error("claude exited with error", "err", err, "stderr", stderrStr)
+		if result.Text == "" {
+			return nil, fmt.Errorf("claude failed: %w (stderr: %s)", err, stderrStr)
+		}
+		// If we got some text output before the error, return it rather than
+		// discarding potentially useful partial results.
 	}
 
 	// Join the stderr goroutine after Wait() so it has had a chance to drain.
@@ -261,10 +268,11 @@ func (e *Executor) parseLine(line string, result *ExecuteResult) {
 }
 
 // writeSessionContext writes SESSION_CONTEXT.md so skills can resolve paths.
-func writeSessionContext(sessionDir string, req *ExecuteRequest) error {
+func writeSessionContext(sessionDir string, req *ExecuteRequest, dbPath string) error {
 	content := fmt.Sprintf(`# Session Context
 
 - App ID: %s
+- Current date: %s
 - Workspace: %s
 - Memory dir: %s
 - Memory lock: %s
@@ -272,8 +280,11 @@ func writeSessionContext(sessionDir string, req *ExecuteRequest) error {
 - Session ID: %s
 - Session dir: %s
 - Attachments dir: %s
+- Channel key: %s
+- DB path: %s
 `,
 		req.AppConfig.ID,
+		time.Now().Format("2006-01-02"),
 		req.WorkspaceDir,
 		filepath.Join(req.WorkspaceDir, "memory"),
 		filepath.Join(req.WorkspaceDir, ".memory.lock"),
@@ -281,6 +292,8 @@ func writeSessionContext(sessionDir string, req *ExecuteRequest) error {
 		req.SessionID,
 		sessionDir,
 		filepath.Join(sessionDir, "attachments"),
+		req.ChannelKey,
+		dbPath,
 	)
 
 	path := filepath.Join(sessionDir, "SESSION_CONTEXT.md")
@@ -291,7 +304,7 @@ func writeSessionContext(sessionDir string, req *ExecuteRequest) error {
 //
 // channel_key formats (internal):
 //
-//	p2p:{open_id}:{app_id}              → p2p:{open_id}
+//	p2p:{chat_id}:{app_id}              → p2p:{chat_id}
 //	group:{chat_id}:{app_id}            → group:{chat_id}
 //	thread:{chat_id}:{thread_id}:{app_id} → group:{chat_id}  (send target is the chat)
 func channelKeyToRoutingKey(channelKey string) string {

@@ -13,6 +13,9 @@ type Config struct {
 	Claude  ClaudeConfig  `mapstructure:"claude"`
 	Session SessionConfig `mapstructure:"session"`
 	Cleanup CleanupConfig `mapstructure:"cleanup"`
+	// DBPath is the absolute path to bot.db, set at runtime after db.Open().
+	// Not read from YAML.
+	DBPath string `mapstructure:"-"`
 }
 
 // AppConfig represents one Feishu application + its workspace.

@@ -70,7 +70,8 @@ func TestReceiveTarget(t *testing.T) {
 		wantID         string
 		wantIDType     string
 	}{
-		{"p2p returns open_id", "p2p", "ou_abc", "ou_abc", "open_id"},
+		{"p2p with ou_ returns open_id", "p2p", "ou_abc", "ou_abc", "open_id"},
+		{"p2p with oc_ returns chat_id", "p2p", "oc_abc", "oc_abc", "chat_id"},
 		{"group returns chat_id", "group", "oc_xyz", "oc_xyz", "chat_id"},
 		{"unknown defaults to chat_id", "other", "oc_xyz", "oc_xyz", "chat_id"},
 	}

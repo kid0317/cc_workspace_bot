@@ -25,12 +25,12 @@
 ## 目录结构
 
 ```
-cases/
+<workspace_dir>/cases/
 ├── index.md                            # 分类索引（每次新增 case 后更新）
 └── YYYY-MM-DD-{slug}.md               # 单条 case 文件
 ```
 
-路径从 `SESSION_CONTEXT.md` 中读取 workspace 根目录，拼接 `cases/`，使用绝对路径。
+路径从 `SESSION_CONTEXT.md` 中读取 `Workspace` 字段（**不是** Memory dir），拼接 `cases/`，使用绝对路径。`cases/` 目录按需创建（写入时 `mkdir -p`）。
 
 ---
 
@@ -93,8 +93,9 @@ status: open | resolved
 ## 写入流程
 
 ```bash
-# 1. 创建 case 文件（flock 加锁，防并发写入）
+# 1. 确保 cases/ 目录存在
 flock -x <memory_lock_path> -c "
+  mkdir -p <workspace_dir>/cases
   cat > <workspace_dir>/cases/YYYY-MM-DD-{slug}.md << 'EOF'
   ...case 内容...
   EOF
@@ -102,7 +103,8 @@ flock -x <memory_lock_path> -c "
 
 # 2. 更新索引（同一个锁）
 flock -x <memory_lock_path> -c "
-  # 在 cases/index.md 对应类别下追加一行
+  mkdir -p <workspace_dir>/cases
+  # 若 index.md 不存在则先创建；在对应类别下追加一行
   ...
 "
 ```

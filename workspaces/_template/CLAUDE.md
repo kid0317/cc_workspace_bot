@@ -3,15 +3,15 @@
 ## 启动流程（每次对话必须执行）
 
 ```
-1. 读取 SESSION_CONTEXT.md  →  获取所有绝对路径（workspace / memory / tasks / attachments）
+1. 读取 SESSION_CONTEXT.md  →  获取所有绝对路径（workspace / memory / tasks / attachments）及当前日期
 2. 读取 memory/MEMORY.md    →  加载用户上下文 + 检查初始化进度
-3. 若初始化未完成          →  正常处理请求，在回复末尾追加【初始化提示】（见下文格式）
+3. 若初始化未完成 且 initialization_reminder ≠ disabled  →  正常处理请求，在回复末尾追加【初始化提示】（见下文格式）
 4. 处理用户请求
 ```
 
 ### 初始化提示格式
 
-仅在 `memory/MEMORY.md` 的初始化进度中存在未完成项（`[ ]`）时，在**每次回复末尾**追加：
+仅在 `memory/MEMORY.md` 的初始化进度中存在未完成项（`[ ]`）**且** `initialization_reminder` 不为 `disabled` 时，在**每次回复末尾**追加：
 
 ```
 ---
@@ -59,6 +59,8 @@
 ```
 → 有任务：引导补充 cron 时间和发送目标，写入 `tasks/` 目录。
 → 暂无：记录在 `memory/MEMORY.md`，标记该项为完成。
+
+> **推荐默认任务**：每月 1 日凌晨 2 点执行记忆归档（`cron: "0 2 1 * *"`），prompt 参考 `skills/memory.md` 的【定期归档】章节。如用户感兴趣，在收集到飞书发送目标（第 5 项）后自动创建此任务。
 
 ### 第 4 项：工作模式（可选）
 ```
@@ -120,12 +122,17 @@
 
 ## 技能索引
 
+### 内置技能（所有工作空间）
+
 | 技能 | 文件 | 触发场景 |
 |------|------|---------|
 | 飞书操作 | `skills/feishu_ops/SKILL.md` | 发消息、读文档、写表格、管日历、建多维表格 |
 | 长记忆 | `skills/memory.md` | 需要跨 session 保存信息时 |
 | 定时任务 | `skills/task.md` | 用户要求创建自动化定时任务时 |
 | 事件记录 | `skills/cases.md` | 用户描述具体事件 / 需要检索历史案例时 |
+| 待办管理 | `skills/todo.md` | 添加/查看/完成待办、收工记日志、回顾历史工作 |
+| 感悟记录 | `skills/insights.md` | 记录碎片化感悟、按月归档、分类检索回顾 |
+| 历史对话检索 | `skills/chat_history.md` | 用户查询历史聊天记录、回顾指定关键词/时间段的对话 |
 
 ---
 
@@ -167,8 +174,8 @@
 
 ### 禁止破坏性操作
 - 不得删除任何文件或目录（禁止 `rm`、`rmdir`、`shutil.rmtree` 等）
-- 不得覆盖 `SESSION_CONTEXT.md`、`CLAUDE.md`、skill 文件等系统文件
-- 不得修改 `tasks/` 目录下已存在任务的 YAML（只能新增）
+- 不得覆盖 `SESSION_CONTEXT.md`、skill 文件、`feishu_ops/feishu.json` 等框架管理的文件（`CLAUDE.md` 可在初始化时修改指定 placeholder 区域）
+- 不得修改 `tasks/` 目录下已存在任务的 YAML（只能新增）；如需变更，让用户通过管理界面操作
 - 不得执行格式化磁盘、清空目录、kill 进程等高风险命令
 
 ### 禁止越权访问

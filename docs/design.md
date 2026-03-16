@@ -1,7 +1,7 @@
 # 系统设计文档
 
 > 状态: 已实现
-> 最后更新: 2026-03-09
+> 最后更新: 2026-03-10
 
 ## 实现状态速查
 
@@ -382,8 +382,8 @@ sequenceDiagram
     Scheduler->>Scheduler: cron 触发
     Scheduler->>Runner: 执行任务（含 app_id、target、prompt）
     Runner->>DB: 查询或创建 target 的 channel & 活跃 session
-    Runner->>Exec: 执行 claude（prompt, session_id, claude_session_id）
-    Exec->>Claude: 子进程（cmd.Dir = session 目录，--resume 或新建）
+    Runner->>Exec: 执行 claude（prompt, session_id，全新会话不带 --resume）
+    Exec->>Claude: 子进程（cmd.Dir = session 目录，每次新建会话）
     Claude-->>Exec: 输出结果
     Exec-->>Runner: 完整结果
     Runner->>Sender: 主动推送消息到 target_id
@@ -533,7 +533,8 @@ workspaces/<app-id>/
 ```
 cc-workspace-bot/
 ├── cmd/
-│   └── server/main.go          # 入口：配置加载、组件连线、WS 客户端启动、优雅关闭
+│   ├── server/main.go          # 入口：配置加载、组件连线、WS 客户端启动、优雅关闭
+│   └── dbcheck/main.go         # DB 调试工具：查询 session / message 数据
 ├── internal/
 │   ├── config/
 │   │   ├── config.go           # Viper YAML 配置结构 + Validate()
@@ -693,3 +694,8 @@ flowchart TD
 | Workspace 初始化模式 | CLAUDE.md 内置引导流程，memory/MEMORY.md 有进度清单 | `workspaces/_template/` |
 | WORKSPACE_DIR 环境变量 | subprocess 注入 `WORKSPACE_DIR=req.WorkspaceDir` | `claude/executor.go:Execute` |
 | 多供应商 env 覆盖 | 三层覆盖：filterEnv 清理进程 env → --settings 覆盖 settings.json → --model 最高优先 | `claude/executor.go:buildSettingsJSON/filterEnv/buildArgs` |
+| 嵌套会话防护 | filterEnv 额外清理 `CLAUDECODE`/`CLAUDE_CODE_*`，防止从 Claude CLI 内启动时的嵌套检测 | `claude/executor.go:Execute` |
+| 纯附件缓存 | 纯附件消息（无文字）缓存后提示用户描述意图，下条文字合并发送 | `session/worker.go:isAttachmentOnly/pendingAttachmentPrompts` |
+| 空结果守护 | claude 返回空文本时通知用户并建议 `/new` 开新会话 | `session/worker.go:process` |
+| 定时任务全新会话 | 每次任务执行不传 `--resume`，避免过期/超长 context 导致失败 | `task/runner.go:Run` |
+| P2P target_id 格式兼容 | `receiveTarget()` 自动检测 `oc_*`(chat_id) vs `ou_*`(open_id) 格式 | `task/runner.go:receiveTarget` |

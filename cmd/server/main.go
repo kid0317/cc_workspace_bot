@@ -51,6 +51,9 @@ func main() {
 		slog.Error("open database", "err", err)
 		os.Exit(1)
 	}
+	if absDB, err := filepath.Abs("bot.db"); err == nil {
+		cfg.DBPath = absDB
+	}
 
 	// ── Workspace init ────────────────────────────────────────────
 	templateDir := filepath.Join("workspaces", "_template")

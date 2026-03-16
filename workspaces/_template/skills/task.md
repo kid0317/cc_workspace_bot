@@ -7,7 +7,7 @@
 任务文件路径：`<tasks_dir>/<uuid>.yaml`
 
 ```yaml
-id: "550e8400-e29b-41d4-a716-446655440000"   # 必填，UUID
+id: "550e8400-e29b-41d4-a716-446655440000"   # 必填，UUID 格式（与文件名一致）
 app_id: "product-assistant"                    # 必填，当前应用 ID（从 SESSION_CONTEXT.md 读取）
 name: "每日技术早报"                             # 任务名称
 cron: "0 9 * * 1-5"                          # cron 表达式（工作日早9点）
@@ -23,9 +23,10 @@ enabled: true                                  # 是否启用
 
 1. 从 SESSION_CONTEXT.md 读取 `Tasks dir` 和 `App ID`
 2. 从当前对话的 `<system_routing>` 块解析默认发送目标：
-   - `routing_key` 格式为 `p2p:{open_id}` → `target_type: "p2p"`，`target_id: "{open_id}"`
-   - `routing_key` 格式为 `group:{chat_id}` → `target_type: "group"`，`target_id: "{chat_id}"`
+   - **私聊（p2p）**：`target_type: "p2p"`，`target_id` 填写 `sender_id`（`ou_*` 格式的用户 open_id）
+   - **群聊（group）**：`routing_key` 格式为 `group:{chat_id}` → `target_type: "group"`，`target_id: "{chat_id}"`
    - `created_by` 填写 `<system_routing>` 中的 `sender_id`
+   - ⚠️ **注意**：`routing_key` 中 `p2p:` 后面的是 `chat_id`（`oc_*` 格式），**不是** `open_id`，不可用作 `target_id`
    - 若用户明确指定了其他发送目标，以用户指定为准
 3. 生成一个 UUID 作为任务 ID 和文件名
 4. 确认用户的意图：cron 时间、执行内容（发送目标已从步骤 2 自动确定）
@@ -56,7 +57,7 @@ enabled: true                                  # 是否启用
 cron 时间到达
   → 框架将 prompt 作为对话消息传给 claude CLI
   → claude 在 workspace 环境中自主执行
-       （可使用 Read / Write / Bash / feishu_ops 等工具）
+       （可使用 Read / Write / Edit / Bash 等工具，飞书操作通过 Bash 调用 skills/feishu_ops 脚本）
   → claude 输出最终文字结果
   → 框架将该结果通过飞书文字消息发送到 target_id 对应的聊天
 ```

@@ -165,3 +165,57 @@ func TestReplacePaths_FilePrefix(t *testing.T) {
 		t.Errorf("file attachment should be relocated to attachDir, got: %s", result)
 	}
 }
+
+// ── isAttachmentOnly ────────────────────────────────────────────────────────
+
+func TestIsAttachmentOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   bool
+	}{
+		{"single image", "[图片: /path/a.jpg]", true},
+		{"single file", "[文件: /path/b.pdf]", true},
+		{"image and file", "[图片: /path/a.jpg]\n[文件: /path/b.pdf]", true},
+		{"multiple images", "[图片: /path/a.jpg] [图片: /path/b.png]", true},
+		{"text with image", "请分析这张图 [图片: /path/a.jpg]", false},
+		{"image with text after", "[图片: /path/a.jpg] 分析一下", false},
+		{"plain text", "你好", false},
+		{"empty string", "", true},
+		{"whitespace only", "  \n  ", true},
+		{"image with surrounding whitespace", "  [图片: /path/a.jpg]  ", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAttachmentOnly(tt.prompt)
+			if got != tt.want {
+				t.Errorf("isAttachmentOnly(%q) = %v, want %v", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}
+
+// ── attachmentReplyText ─────────────────────────────────────────────────────
+
+func TestAttachmentReplyText(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{"image only", "[图片: /path/a.jpg]", "已收到图片，请描述你希望我做什么"},
+		{"file only", "[文件: /path/b.pdf]", "已收到文件，请描述你希望我做什么"},
+		{"image and file", "[图片: /path/a.jpg]\n[文件: /path/b.pdf]", "已收到图片/文件，请描述你希望我做什么"},
+		{"multiple images", "[图片: /a.jpg] [图片: /b.png]", "已收到图片，请描述你希望我做什么"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := attachmentReplyText(tt.prompt)
+			if got != tt.want {
+				t.Errorf("attachmentReplyText(%q) = %q, want %q", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}

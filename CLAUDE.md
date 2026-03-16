@@ -47,6 +47,11 @@ gofmt -w .
 
 # Tidy dependencies
 go mod tidy
+
+# DB 调试：查询 session 和 message 数据
+# 固定读取当前目录的 bot.db，过滤 channel_key 含 "yzk_worker" 的 session
+# 输出：session 列表（ID/channel/status/claude_sid/时间）+ 每个 session 的消息明细
+go run ./cmd/dbcheck
 ```
 
 ## Directory Structure
@@ -54,7 +59,8 @@ go mod tidy
 ```
 cc-workspace-bot/
 ├── cmd/
-│   └── server/main.go          # 入口：加载配置、连线各组件、启动
+│   ├── server/main.go          # 入口：加载配置、连线各组件、启动
+│   └── dbcheck/main.go         # DB 调试工具：查询 session / message 数据
 ├── internal/
 │   ├── config/
 │   │   └── config.go           # Viper YAML 配置结构 + Validate()
@@ -106,7 +112,7 @@ cc-workspace-bot/
 
 | 飞书渠道 | channel_key |
 |---|---|
-| 单聊 | `p2p:{open_id}:{app_id}` |
+| 单聊 | `p2p:{chat_id}:{app_id}` |
 | 群聊 | `group:{chat_id}:{app_id}` |
 | 话题群 | `thread:{chat_id}:{thread_id}:{app_id}` |
 
@@ -215,7 +221,7 @@ claude \
 
 #### 模型 / 供应商注入机制（三层覆盖）
 
-1. **进程环境层**：`filterEnv()` 过滤掉 `os.Environ()` 中已有的 `ANTHROPIC_*` 变量，再 append 新值
+1. **进程环境层**：`filterEnv()` 先过滤 `CLAUDECODE`/`CLAUDE_CODE_*`（防止嵌套会话检测），再过滤 `ANTHROPIC_*` 变量后 append 新值
 2. **CLI `--settings` 层**：`buildSettingsJSON()` 生成 `{"env":{"ANTHROPIC_BASE_URL":"...","ANTHROPIC_AUTH_TOKEN":"...","ANTHROPIC_MODEL":"..."}}` 传给 `--settings` 参数，优先级高于 `~/.claude/settings.json`
 3. **CLI `--model` 层**：直接通过 `--model` 参数指定，最高优先级
 
@@ -238,6 +244,8 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=<from model>
 - 消息队列深度 64，串行处理
 - 空闲 30 分钟后自动退出并归档 session
 - `/new` 命令：归档当前 session，创建新 session 目录
+- **附件缓存**：纯附件消息（无文字）自动缓存，提示用户描述意图；下条文字消息合并附件引用后一起发给 claude
+- **空结果守护**：claude 返回空文本时（如 context 过长），提示用户 `/new` 开新会话
 
 ### 附件处理
 
@@ -245,7 +253,7 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=<from model>
 
 ### 定时任务
 
-claude 通过 `task` skill 写入 `<workspace>/tasks/<uuid>.yaml` → fsnotify 触发 → DB 更新 + gocron Job 注册。YAML 文件为 source of truth。
+claude 通过 `task` skill 写入 `<workspace>/tasks/<uuid>.yaml` → fsnotify 触发 → DB 更新 + gocron Job 注册。YAML 文件为 source of truth。每次任务执行使用全新 claude 会话（不传 `--resume`），避免过期/过长 context 导致失败。
 
 ## Dependencies
 

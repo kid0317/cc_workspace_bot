@@ -36,6 +36,11 @@ type Worker struct {
 
 	queue  chan *feishu.IncomingMessage
 	stopCh chan struct{}
+
+	// pendingAttachmentPrompts caches prompts from attachment-only messages.
+	// When the next text message arrives, these are prepended to form a
+	// combined prompt before sending to Claude.
+	pendingAttachmentPrompts []string
 }
 
 func newWorker(
@@ -93,10 +98,45 @@ func (w *Worker) run(ctx context.Context, onExit func()) {
 	}
 }
 
+// isAttachmentOnly reports whether the prompt contains ONLY attachment
+// references ([图片: ...] / [文件: ...]) with no additional text.
+func isAttachmentOnly(prompt string) bool {
+	cleaned := prompt
+	for _, prefix := range []string{"[图片: ", "[文件: "} {
+		for {
+			idx := strings.Index(cleaned, prefix)
+			if idx < 0 {
+				break
+			}
+			end := strings.IndexByte(cleaned[idx:], ']')
+			if end < 0 {
+				break
+			}
+			cleaned = cleaned[:idx] + cleaned[idx+end+1:]
+		}
+	}
+	return strings.TrimSpace(cleaned) == ""
+}
+
+// attachmentReplyText returns the acknowledgement text for an attachment-only message.
+func attachmentReplyText(prompt string) string {
+	hasImage := strings.Contains(prompt, "[图片: ")
+	hasFile := strings.Contains(prompt, "[文件: ")
+	switch {
+	case hasImage && hasFile:
+		return "已收到图片/文件，请描述你希望我做什么"
+	case hasImage:
+		return "已收到图片，请描述你希望我做什么"
+	default:
+		return "已收到文件，请描述你希望我做什么"
+	}
+}
+
 // process handles a single incoming message.
 // H-8: decomposed into focused helpers to keep each step under 50 lines.
 func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	if strings.TrimSpace(msg.Prompt) == "/new" {
+		w.pendingAttachmentPrompts = nil
 		w.handleNew(ctx, msg)
 		return
 	}
@@ -110,6 +150,23 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	msg.Prompt = w.moveAttachments(msg.Prompt, sess.ID)
 	w.recordMessage(sess.ID, msg.SenderID, "user", msg.Prompt, msg.MessageID)
 
+	// Cache attachment-only messages and reply with a prompt for description.
+	if isAttachmentOnly(msg.Prompt) {
+		w.pendingAttachmentPrompts = append(w.pendingAttachmentPrompts, msg.Prompt)
+		reply := attachmentReplyText(msg.Prompt)
+		if _, err := w.sender.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply); err != nil {
+			slog.Error("send attachment ack", "err", err)
+		}
+		return
+	}
+
+	// Merge any pending attachment references into the current prompt.
+	if len(w.pendingAttachmentPrompts) > 0 {
+		combined := strings.Join(w.pendingAttachmentPrompts, "\n") + "\n" + msg.Prompt
+		msg.Prompt = combined
+		w.pendingAttachmentPrompts = nil
+	}
+
 	cardMsgID := w.sendThinkingCard(ctx, msg)
 	result, err := w.runClaude(ctx, sess, msg)
 	if err != nil {
@@ -118,6 +175,16 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	}
 
 	w.persistResult(sess, result)
+
+	// Guard against claude returning success but empty text (e.g. context
+	// overflow on --resume). Notify the user instead of leaving the thinking
+	// card hanging indefinitely.
+	if result.Text == "" {
+		w.replyError(ctx, msg, cardMsgID,
+			fmt.Errorf("AI 返回为空，可能是会话上下文过长。请发送 /new 开启新会话后重试"))
+		return
+	}
+
 	w.sendResult(ctx, msg, cardMsgID, result.Text)
 }
 

@@ -75,25 +75,20 @@ func (r *Runner) Run(ctx context.Context, task *model.Task) {
 		return
 	}
 
+	// Each task execution starts a fresh claude conversation (no --resume).
+	// Reusing a stale claude_session_id from a previous run causes failures
+	// when the session has expired or the context has grown too large.
 	result, err := r.executor.Execute(ctx, &claude.ExecuteRequest{
-		Prompt:          task.Prompt,
-		SessionID:       sess.ID,
-		ClaudeSessionID: sess.ClaudeSessionID,
-		AppConfig:       appCfg,
-		WorkspaceDir:    appCfg.WorkspaceDir,
-		ChannelKey:      channelKey,
-		SenderID:        task.CreatedBy,
+		Prompt:       task.Prompt,
+		SessionID:    sess.ID,
+		AppConfig:    appCfg,
+		WorkspaceDir: appCfg.WorkspaceDir,
+		ChannelKey:   channelKey,
+		SenderID:     task.CreatedBy,
 	})
 	if err != nil {
 		slog.Error("task runner: execute", "err", err, "task_id", task.ID)
 		return
-	}
-
-	// C-2: log GORM write errors.
-	if result.ClaudeSessionID != "" && sess.ClaudeSessionID == "" {
-		if err := r.db.Model(sess).Update("claude_session_id", result.ClaudeSessionID).Error; err != nil {
-			slog.Error("task runner: update claude_session_id", "err", err)
-		}
 	}
 
 	if result.Text != "" {
@@ -207,6 +202,11 @@ func buildChannelKey(targetType, targetID, appID string) string {
 
 func receiveTarget(targetType, targetID string) (string, string) {
 	if targetType == "p2p" {
+		// Detect ID format: oc_* is a chat_id, ou_* is an open_id.
+		// Task YAMLs may contain either format due to historical inconsistency.
+		if strings.HasPrefix(targetID, "oc_") {
+			return targetID, "chat_id"
+		}
 		return targetID, "open_id"
 	}
 	return targetID, "chat_id"
