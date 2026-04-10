@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flock *)",
+      "Bash(python3 __WORKSPACE_DIR__/.claude/skills/feishu_ops/scripts/*.py *)",
+      "Bash(python3 __WORKSPACE_DIR__/.claude/hooks/inject_history.py)",
+      "Bash(bash __WORKSPACE_DIR__/.claude/hooks/reply_checklist.sh)",
+      "Bash(ls *memory*)",
+      "Bash(ls *tasks*)",
+      "Bash(date *)",
+      "Bash(find */tasks -name *.yaml -type f)",
+      "Bash(sqlite3 * *)",
+      "Bash(grep *)",
+      "Bash(wc -l *)",
+      "Bash(sed -i *)",
+      "Bash(cp *)",
+      "Bash(cat *)",
+      "Bash(echo * >> *)",
+      "Bash(mkdir -p *)",
+      "Bash(touch *)",
+      "Bash(python3 -c *)",
+      "Bash(timeout * *)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "bash __WORKSPACE_DIR__/.claude/hooks/reply_checklist.sh"
+      },
+      {
+        "type": "command",
+        "command": "python3 __WORKSPACE_DIR__/.claude/hooks/inject_history.py"
+      }
+    ]
+  }
+}

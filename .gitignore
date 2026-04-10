@@ -36,3 +36,6 @@ workspaces/*/.memory.lock
 # ── Template exceptions (these are source files, not runtime data) ─────────────
 !workspaces/_template/memory/
 !workspaces/_template/.claude/
+!workspaces/_companion/memory/
+!workspaces/_companion/tasks/
+!workspaces/_companion/.claude/settings.local.json

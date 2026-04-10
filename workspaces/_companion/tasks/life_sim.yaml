@@ -1,0 +1,14 @@
+# 生活日志生成定时任务模板
+# 每4小时触发一次，模拟角色的日常生活片段。
+# 由 init_companion_workspace.sh 初始化时填入具体值。
+
+id: __APP_ID__-life-sim
+app_id: __FEISHU_APP_ID__
+name: life_simulation
+target_type: __TARGET_TYPE__   # p2p 或 group
+target_id: __TARGET_ID__
+cron: "0 */4 * * *"            # 每4小时触发（0时/4时/8时/12时/16时/20时）
+enabled: true                  # 默认开启；initialization_status != done 时 skill 自动静默退出
+prompt: |
+  加载 __WORKSPACE_DIR__/.claude/skills/life_sim/SKILL.md，执行生活日志生成流程。
+  先掷骰子决定是否生成（夜间20%，其他时段60%），不生成时静默退出。

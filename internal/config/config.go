@@ -26,8 +26,19 @@ type AppConfig struct {
 	FeishuVerificationToken string          `mapstructure:"feishu_verification_token"`
 	FeishuEncryptKey        string          `mapstructure:"feishu_encrypt_key"`
 	WorkspaceDir            string          `mapstructure:"workspace_dir"`
-	AllowedChats            []string        `mapstructure:"allowed_chats"`
-	Claude                  AppClaudeConfig `mapstructure:"claude"`
+	// WorkspaceMode controls the reply UI behaviour.
+	// "work" (default): sends an interactive card first ("thinking…"), then
+	//   patches it with the final response — good for task-oriented bots.
+	// "companion": replies with plain text directly, no card — gives a more
+	//   conversational, human-like feel for companion/lifestyle workspaces.
+	WorkspaceMode string          `mapstructure:"workspace_mode"`
+	AllowedChats  []string        `mapstructure:"allowed_chats"`
+	Claude        AppClaudeConfig `mapstructure:"claude"`
+}
+
+// IsCompanion reports whether this workspace uses companion (no-card) mode.
+func (a *AppConfig) IsCompanion() bool {
+	return a.WorkspaceMode == "companion"
 }
 
 // AllowedChat returns true if the given chat ID is allowed (empty list = all allowed).

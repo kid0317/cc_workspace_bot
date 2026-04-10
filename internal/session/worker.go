@@ -85,8 +85,7 @@ func (w *Worker) run(ctx context.Context, onExit func()) {
 			w.process(ctx, msg)
 
 		case <-timer.C:
-			slog.Info("session worker idle timeout, archiving", "channel", w.channelKey)
-			w.archiveCurrentSession()
+			slog.Info("session worker idle timeout, exiting (session kept active)", "channel", w.channelKey)
 			return
 
 		case <-w.stopCh:
@@ -167,7 +166,10 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 		w.pendingAttachmentPrompts = nil
 	}
 
-	cardMsgID := w.sendThinkingCard(ctx, msg)
+	var cardMsgID string
+	if !w.appCfg.IsCompanion() {
+		cardMsgID = w.sendThinkingCard(ctx, msg)
+	}
 	result, err := w.runClaude(ctx, sess, msg)
 	if err != nil {
 		w.replyError(ctx, msg, cardMsgID, err)
