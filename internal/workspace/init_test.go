@@ -14,7 +14,8 @@ func TestInit_CreatesRequiredDirs(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	for _, sub := range []string{"skills", "memory", "tasks", "sessions"} {
+	// .claude/skills is the expected path; "skills" at root was the old layout.
+	for _, sub := range []string{filepath.Join(".claude", "skills"), "memory", "tasks", "sessions"} {
 		path := filepath.Join(workspaceDir, sub)
 		if info, err := os.Stat(path); err != nil || !info.IsDir() {
 			t.Errorf("expected dir %s to exist", path)

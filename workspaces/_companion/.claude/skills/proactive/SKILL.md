@@ -8,6 +8,10 @@ allowed-tools: Bash, Read, Write
 
 # 主动唤醒执行流程
 
+> **CRITICAL：选择静默时，回复内容必须完全为空。**
+> 静默路径（exit 0）执行后 Claude 不得输出任何文字。
+> 发送"当前不需要发信息"之类的说明会直接泄露给用户，严重破坏沉浸感。
+
 ## Step 1：发送前置检查（静默条件）
 
 ```bash
@@ -141,17 +145,29 @@ exec 9>&-
    - 若无 system_routing（冷启动或测试环境）→ 从 user_profile.md 的【飞书发送目标】字段读取
    - **不从 SESSION_CONTEXT.md 读取**（定时任务无对话 session，该文件可能不存在或为旧值）
 
-3. 发送：
+3. 发送并记录（必须使用 send_and_record.py，不得使用 send_text.py）：
 
 ```bash
 # routing_key 格式：p2p:oc_xxx 或 group:oc_xxx
 ROUTING_KEY=$(grep -A1 'routing_key' "$PROFILE_FILE" | grep -oP '(p2p|group):[a-zA-Z0-9_]+')
 
+# 从最近的 SESSION_CONTEXT.md 提取 session_id 和 db_path
+LATEST_CTX=$(find "$WORKSPACE_DIR/sessions" -name "SESSION_CONTEXT.md" \
+    -exec stat -c '%Y %n' {} \; 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
+SESSION_ID=$(grep "^- Session ID:" "$LATEST_CTX" 2>/dev/null | awk '{print $NF}')
+DB_PATH=$(grep "^- DB path:" "$LATEST_CTX" 2>/dev/null | sed 's/^- DB path: //')
+
 SCRIPT_DIR="$WORKSPACE_DIR/.claude/skills/feishu_ops/scripts"
-python3 "$SCRIPT_DIR/send_text.py" \
+python3 "$SCRIPT_DIR/send_and_record.py" \
     --routing_key "$ROUTING_KEY" \
-    --text "消息内容"
+    --text "消息内容" \
+    --db_path "$DB_PATH" \
+    --session_id "$SESSION_ID"
 ```
+
+> **为什么用 send_and_record.py**：此任务 send_output=false，runner 不会将 Claude 输出转发给用户，
+> 也不会写 DB。send_and_record.py 同时完成飞书发送 + messages 表写入，确保用户下次对话时
+> Claude 能从历史中看到自己发过的内容。DB 写入失败不阻断发送（降级记录错误）。
 
 ---
 
@@ -179,8 +195,6 @@ echo "skip_count: 0" > "$PROACTIVE_STATE"
 初始化完成后，CLAUDE.md 创建此文件：
 
 ```yaml
-id: {workspace_app_id}-proactive
-app_id: {feishu_app_id}
 name: proactive_reach
 target_type: p2p                    # 从 routing_key 推断（p2p 或 group）
 target_id: {target_id}              # 从 routing_key 提取
@@ -191,4 +205,5 @@ prompt: |
   routing_key 优先从 <system_routing> 上下文读取；若无则从 memory/user_profile.md 读取。
 ```
 
-注意：target_type 和 target_id 由初始化脚本在阶段二完成后，从 user_profile.md 解析 routing_key 并写入 YAML，不由 Claude 自行填写。
+注意：target_type 和 target_id 由初始化脚本在阶段二完成后，从 SESSION_CONTEXT.md 的 Channel key 解析并写入 YAML，不由 Claude 自行填写。
+文件名即任务 ID（proactive_reach.yaml → id: proactive_reach）；app_id 和 id 字段由系统自动推断，模板中不需要填写。

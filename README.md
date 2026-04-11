@@ -117,7 +117,7 @@ claude CLI（cmd.Dir = sessions/<session-id>/，--resume 复用 context）
 ```
 用户：帮我安装 akshare，并写一个 skill，能查询股票实时行情、K线数据和资金流向
 助手：好的，我来安装依赖并创建 skill...
-     （Claude 执行 pip install akshare，在 skills/ 下创建 stock_data.md 和对应脚本）
+     （Claude 执行 pip install akshare，在 .claude/skills/ 下创建 stock_data/ 目录和对应脚本）
 助手：✅ 已安装完成。现在可以通过「查询 600519 的行情」直接获取数据。
 ```
 
@@ -558,8 +558,8 @@ cp config.yaml.template config.yaml
 
 **脚本执行的操作**：
 
-1. 创建目录结构（`skills/`、`memory/`、`tasks/`、`sessions/`）
-2. 将飞书凭证写入 `skills/feishu_ops/feishu.json`（权限 `0600`，不暴露给 LLM）
+1. 创建目录结构（`.claude/skills/`、`memory/`、`tasks/`、`sessions/`）
+2. 将飞书凭证写入 `.claude/skills/feishu_ops/feishu.json`（权限 `0600`，不暴露给 LLM）
 3. 从 `workspaces/_template/` 复制初始文件（非破坏性，已存在的文件自动跳过）
 4. 备份 `config.yaml` 并追加新 app 配置块
 
@@ -655,7 +655,7 @@ enabled: true
 
 ### 自定义 Workspace
 
-每个 workspace 的行为完全由 `CLAUDE.md` 和 `skills/` 定义。
+每个 workspace 的行为完全由 `CLAUDE.md` 和 `.claude/skills/` 定义。
 
 **初始化引导**：首次使用时，向机器人发送「初始化」，助手将引导完成以下配置：
 
@@ -667,7 +667,7 @@ enabled: true
 
 **长期记忆**：重要信息自动保存到 `memory/` 目录，跨 session 共享（通过 flock 文件锁保障并发安全）。
 
-**飞书操作能力**（`skills/feishu_ops/`）：
+**飞书操作能力**（`.claude/skills/feishu_ops/`）：
 
 | 能力 | 说明 |
 |------|------|
@@ -825,11 +825,15 @@ cc-workspace-bot/
 │       ├── memory/
 │       │   ├── MEMORY.md       # 主索引 + 初始化进度清单
 │       │   └── user_profile.md # 用户档案模板
-│       └── skills/
-│           ├── memory.md       # 长记忆读写规范（含 flock 操作指南）
-│           ├── task.md         # 定时任务 YAML 格式规范
-│           ├── cases.md        # 事件记录规范（cases/ 目录管理）
-│           └── feishu_ops/     # 飞书集成（SKILL.md + 18 个 Python 脚本）
+│       └── .claude/
+│           └── skills/
+│               ├── feishu_ops/     # 飞书集成（SKILL.md + 18 个 Python 脚本）
+│               ├── memory/         # 长记忆读写规范（含 flock 操作指南）
+│               ├── task/           # 定时任务 YAML 格式规范
+│               ├── cases/          # 事件记录规范（cases/ 目录管理）
+│               ├── todo/           # 待办管理与日志
+│               ├── insights/       # 感悟记录
+│               └── chat_history/   # 历史对话检索
 ├── docs/
 │   ├── design.md               # 架构设计、时序图、设计决策
 │   ├── requirements.md         # 功能需求
@@ -849,14 +853,18 @@ workspaces/<app-id>/
 ├── .memory.lock                # flock 锁文件（框架自动创建）
 ├── .claude/
 │   └── settings.local.json    # Claude CLI 权限配置
-├── skills/
-│   ├── feishu_ops/
-│   │   ├── SKILL.md            # 飞书 API 操作手册
-│   │   ├── feishu.json         # 飞书凭证（0600 权限，不暴露给 LLM）
-│   │   └── scripts/            # Python 脚本（18 个飞书操作）
-│   ├── memory.md               # 长记忆读写规范
-│   ├── task.md                 # 定时任务创建规范
-│   └── cases.md                # 事件记录规范
+├── .claude/
+│   └── skills/
+│       ├── feishu_ops/
+│       │   ├── SKILL.md            # 飞书 API 操作手册
+│       │   ├── feishu.json         # 飞书凭证（0600 权限，不暴露给 LLM）
+│       │   └── scripts/            # Python 脚本（18 个飞书操作）
+│       ├── memory/             # 长记忆读写规范（SKILL.md）
+│       ├── task/               # 定时任务创建规范（SKILL.md）
+│       ├── cases/              # 事件记录规范（SKILL.md）
+│       ├── todo/               # 待办管理（SKILL.md）
+│       ├── insights/           # 感悟记录（SKILL.md）
+│       └── chat_history/       # 历史对话检索（SKILL.md + 脚本）
 ├── memory/                     # 长期记忆（跨 session 共享）
 │   ├── MEMORY.md               # 主索引 + 初始化进度
 │   └── user_profile.md         # 用户档案
@@ -921,14 +929,14 @@ go mod tidy
 | 层面 | 隔离方式 |
 |------|---------|
 | Session 级写操作 | `cmd.Dir = sessions/<id>/`，每个 session 独立目录 |
-| 跨 session 共享内存 | flock 文件锁（`skills/memory.md` 规范，skill 层实现）|
+| 跨 session 共享内存 | flock 文件锁（`.claude/skills/memory/` 规范，skill 层实现）|
 | 同一 channel 消息 | Session Worker 串行队列（channel 深度 64）|
 
 ### 添加新 Skill
 
-在 workspace 的 `skills/` 目录下新建 Markdown 文件，在 `CLAUDE.md` 的技能索引表中注册即可。
+在 workspace 的 `.claude/skills/<skill-name>/` 目录下新建 `SKILL.md`（含 frontmatter）及所需脚本，在 `CLAUDE.md` 的技能索引表中注册即可。创建新 skill 前先调用 `/skill-creater` 加载规范。
 
-如需飞书 Python 脚本，参考 `skills/feishu_ops/scripts/` 中已有的 18 个脚本和 `_feishu_auth.py` 公共模块。
+如需飞书 Python 脚本，参考 `.claude/skills/feishu_ops/scripts/` 中已有的 18 个脚本和 `_feishu_auth.py` 公共模块。
 
 ### 关键设计决策
 

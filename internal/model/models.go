@@ -40,30 +40,45 @@ type Message struct {
 
 // Task mirrors a tasks/<uuid>.yaml file at runtime.
 type Task struct {
-	ID          string `gorm:"primaryKey"`
-	AppID       string `gorm:"index;not null"`
-	Name        string
-	CronExpr    string
-	TargetType  string // p2p / group
-	TargetID    string // open_id or chat_id
-	Prompt      string `gorm:"type:text"`
-	Enabled     bool   `gorm:"default:true"`
-	CreatedBy   string
-	CreatedAt   time.Time
-	LastRunAt   *time.Time
-	DeletedAt   gorm.DeletedAt `gorm:"index"`
+	ID         string `gorm:"primaryKey"`
+	AppID      string `gorm:"index;not null"`
+	Name       string
+	CronExpr   string
+	TargetType string // p2p / group
+	TargetID   string // open_id or chat_id
+	Prompt     string `gorm:"type:text"`
+	Enabled    bool   `gorm:"default:true"`
+	// SendOutput controls whether Claude's text output is forwarded to the user.
+	// Set to false for background tasks (memory_distill, life_sim) that must
+	// never surface internal results to users.
+	SendOutput bool       `gorm:"default:true"`
+	CreatedBy  string
+	CreatedAt  time.Time
+	LastRunAt  *time.Time
+	DeletedAt  gorm.DeletedAt `gorm:"index"`
 }
 
 // TaskYAML is the on-disk YAML representation of a task file.
 type TaskYAML struct {
-	ID          string    `yaml:"id"`
-	AppID       string    `yaml:"app_id"`
-	Name        string    `yaml:"name"`
-	Cron        string    `yaml:"cron"`
-	TargetType  string    `yaml:"target_type"`
-	TargetID    string    `yaml:"target_id"`
-	Prompt      string    `yaml:"prompt"`
-	CreatedBy   string    `yaml:"created_by"`
-	CreatedAt   time.Time `yaml:"created_at"`
-	Enabled     bool      `yaml:"enabled"`
+	// Deprecated: id in YAML is ignored. The task ID is derived from the
+	// filename by LoadYAML (e.g. "memory_distill.yaml" → ID "memory_distill").
+	// This ensures watcher.removeTask can always locate the task by ID.
+	ID string `yaml:"id"`
+	// Deprecated: app_id in YAML is ignored. The workspace ID is derived from
+	// the file path by the Watcher and injected at load time via LoadYAML.
+	// Setting this field has no effect.
+	AppID      string    `yaml:"app_id"`
+	Name       string    `yaml:"name"`
+	Cron       string    `yaml:"cron"`
+	TargetType string    `yaml:"target_type"`
+	TargetID   string    `yaml:"target_id"`
+	Prompt     string    `yaml:"prompt"`
+	// SendOutput controls whether Claude's text output is forwarded to the user.
+	// Nil means unset (LoadYAML defaults to true). Set to false for background
+	// tasks (memory_distill, life_sim). Using *bool avoids the Go zero-value
+	// trap where omitting send_output in YAML would silently disable output.
+	SendOutput *bool `yaml:"send_output"`
+	CreatedBy  string    `yaml:"created_by"`
+	CreatedAt  time.Time `yaml:"created_at"`
+	Enabled    bool      `yaml:"enabled"`
 }

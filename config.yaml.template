@@ -5,6 +5,8 @@ apps:
     feishu_verification_token: "xxx"
     feishu_encrypt_key: ""
     workspace_dir: "./workspaces/product-assistant"
+    # workspace_mode: "work"      # 工作类（默认）：先发 thinking 卡片再更新结果
+    # workspace_mode: "companion" # 拟人类：直接发文本消息，无卡片过渡
     allowed_chats: []
     claude:
       permission_mode: "acceptEdits"

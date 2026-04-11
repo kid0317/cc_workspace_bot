@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 	"gorm.io/gorm"
@@ -19,6 +20,8 @@ type Watcher struct {
 	scheduler *Scheduler
 	db        *gorm.DB
 	watcher   *fsnotify.Watcher
+	mu        sync.RWMutex
+	dirAppIDs map[string]string // watched dir path → workspace appID
 }
 
 // NewWatcher creates a Watcher. The caller must call Start before AddDir,
@@ -32,6 +35,7 @@ func NewWatcher(scheduler *Scheduler, db *gorm.DB) (*Watcher, error) {
 		scheduler: scheduler,
 		db:        db,
 		watcher:   fw,
+		dirAppIDs: make(map[string]string),
 	}, nil
 }
 
@@ -42,10 +46,16 @@ func (w *Watcher) Close() {
 }
 
 // AddDir registers a tasks/ directory to watch.
-func (w *Watcher) AddDir(dir string) error {
+// appID is the workspace ID (e.g. "xh_yibu") — it is injected into every
+// task loaded from this directory, overriding whatever app_id the YAML contains.
+// This eliminates the class of bugs where a YAML file stores the wrong app_id.
+func (w *Watcher) AddDir(dir string, appID string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	w.mu.Lock()
+	w.dirAppIDs[dir] = appID
+	w.mu.Unlock()
 	return w.watcher.Add(dir)
 }
 
@@ -78,9 +88,18 @@ func (w *Watcher) Start(ctx context.Context) {
 }
 
 func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
+	if !strings.HasSuffix(event.Name, ".yaml") {
+		return
+	}
+
+	dir := filepath.Dir(event.Name)
+	w.mu.RLock()
+	appID := w.dirAppIDs[dir]
+	w.mu.RUnlock()
+
 	switch {
 	case event.Op&(fsnotify.Create|fsnotify.Write) != 0:
-		task, err := LoadYAML(event.Name)
+		task, err := LoadYAML(event.Name, appID)
 		if err != nil {
 			slog.Error("task watcher: parse yaml", "err", err, "file", event.Name)
 			return
@@ -114,15 +133,21 @@ func (w *Watcher) upsertTask(ctx context.Context, task *model.Task) {
 		slog.Error("task watcher: query task", "err", err)
 		return
 	} else {
-		// Update existing.
+		// Update existing. Column names must match the GORM snake_case mapping of
+		// model.Task fields. deleted_at must be reset via gorm.Expr("NULL") rather
+		// than nil — for struct-based updates GORM skips zero values, but for maps
+		// behaviour is driver-dependent and unreliable for nullable columns.
+		// gorm.Expr("NULL") is explicit and works regardless of update mode.
 		updates := map[string]interface{}{
 			"name":        task.Name,
+			"app_id":      task.AppID,
 			"cron_expr":   task.CronExpr,
 			"target_type": task.TargetType,
 			"target_id":   task.TargetID,
 			"prompt":      task.Prompt,
 			"enabled":     task.Enabled,
-			"deleted_at":  nil,
+			"send_output": task.SendOutput,
+			"deleted_at":  gorm.Expr("NULL"),
 		}
 		if err := w.db.Model(&existing).Unscoped().Updates(updates).Error; err != nil {
 			slog.Error("task watcher: update task in DB", "err", err)

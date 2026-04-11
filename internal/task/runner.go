@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -92,9 +93,20 @@ func (r *Runner) Run(ctx context.Context, task *model.Task) {
 	}
 
 	if result.Text != "" {
-		receiveID, receiveType := receiveTarget(task.TargetType, task.TargetID)
-		if _, err := sender.SendText(ctx, receiveID, receiveType, result.Text); err != nil {
-			slog.Error("task runner: send text", "err", err)
+		if task.SendOutput {
+			receiveID, receiveType := receiveTarget(task.TargetType, task.TargetID)
+			if id, err := sender.SendText(ctx, receiveID, receiveType, result.Text); err != nil {
+				slog.Error("task runner: send text", "err", err)
+				// Do NOT record: message was not delivered, recording would
+				// create a phantom history entry Claude never actually sent.
+			} else {
+				// Record only on confirmed delivery so conversation history
+				// stays consistent with what the user actually received.
+				r.recordSentMessage(sess.ID, result.Text, id)
+			}
+		} else {
+			slog.Info("task runner: send_output=false, suppressing text output",
+				"task_id", task.ID, "text_len", len(result.Text))
 		}
 	}
 
@@ -106,20 +118,27 @@ func (r *Runner) Run(ctx context.Context, task *model.Task) {
 
 func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg *config.AppConfig) (*model.Session, error) {
 	var sess model.Session
-	result := r.db.Where("channel_key = ? AND status = ?", channelKey, "active").
+	// Reuse the most recent session for this channel regardless of status.
+	// Filtering by status='active' risks unbounded session growth: if a session
+	// is ever archived (e.g. by a /new command), every subsequent task execution
+	// on the same channel would create a new orphaned session directory.
+	result := r.db.Where("channel_key = ?", channelKey).
 		Order("created_at DESC").First(&sess)
 	if result.Error == nil {
 		return &sess, nil
 	}
 	// C-3: use errors.Is for GORM sentinel errors.
 	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return nil, result.Error
+		return nil, fmt.Errorf("query session: %w", result.Error)
 	}
 
 	// Ensure channel record exists.
 	chatType, chatID := parseChannelKey(channelKey)
 	var ch model.Channel
 	if err := r.db.Where("channel_key = ?", channelKey).First(&ch).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("query channel: %w", err)
+		}
 		ch = model.Channel{
 			ChannelKey: channelKey,
 			AppID:      appID,
@@ -128,7 +147,7 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 			CreatedAt:  time.Now(),
 		}
 		if err := r.db.Create(&ch).Error; err != nil {
-			slog.Error("task runner: create channel", "err", err)
+			return nil, fmt.Errorf("create channel: %w", err)
 		}
 	}
 
@@ -152,9 +171,16 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 	return &sess, nil
 }
 
+// placeholderRe matches unresolved template placeholders like __TARGET_TYPE__.
+var placeholderRe = regexp.MustCompile(`__[A-Z_]+__`)
+
 // LoadYAML reads a task YAML file and returns a model.Task.
-// M-10: validates the cron expression before returning.
-func LoadYAML(path string) (*model.Task, error) {
+// appID is the workspace ID derived from the file path (e.g. "xh_yibu");
+// it overrides whatever app_id the YAML contains, preventing mismatches between
+// the Feishu App ID and the workspace ID.
+//
+// Returns an error if required fields are empty or contain unresolved placeholders.
+func LoadYAML(path string, appID string) (*model.Task, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -165,16 +191,54 @@ func LoadYAML(path string) (*model.Task, error) {
 		return nil, fmt.Errorf("parse task yaml %s: %w", path, err)
 	}
 
-	if ty.ID == "" {
-		ty.ID = uuid.New().String()
+	// Derive task ID from filename so that watcher.removeTask (which uses the
+	// filename as the lookup key) always finds the correct DB record.
+	// The YAML id field is ignored to avoid ID mismatches on delete.
+	ty.ID = strings.TrimSuffix(filepath.Base(path), ".yaml")
+
+	// D1: workspace ID is authoritative; ignore app_id from YAML.
+	ty.AppID = appID
+
+	// D2: reject tasks with unresolved template placeholders — they would
+	// be stored in DB as real tasks but fail silently at every execution.
+	for field, val := range map[string]string{
+		"target_type": ty.TargetType,
+		"target_id":   ty.TargetID,
+		"prompt":      ty.Prompt,
+	} {
+		if placeholderRe.MatchString(val) {
+			return nil, fmt.Errorf("task %s in %s has unresolved placeholder in field %q: %q", ty.ID, path, field, val)
+		}
+	}
+
+	// D2: required field validation — missing values cause silent execution failures.
+	// Cron is only required for enabled tasks; disabled tasks may omit it since
+	// they are never scheduled (e.g. template seeds with enabled: false).
+	switch {
+	case ty.TargetType == "":
+		return nil, fmt.Errorf("task %s in %s: target_type is required", ty.ID, path)
+	case ty.TargetID == "":
+		return nil, fmt.Errorf("task %s in %s: target_id is required", ty.ID, path)
+	case ty.Cron == "" && ty.Enabled:
+		return nil, fmt.Errorf("task %s in %s: cron is required for enabled tasks", ty.ID, path)
+	case ty.Prompt == "":
+		return nil, fmt.Errorf("task %s in %s: prompt is required", ty.ID, path)
 	}
 
 	// M-10: validate cron expression eagerly so we surface bad configs early.
+	// Skip for disabled tasks with no cron — they will never be scheduled.
 	if ty.Cron != "" {
 		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 		if _, err := parser.Parse(ty.Cron); err != nil {
 			return nil, fmt.Errorf("invalid cron expression %q in %s: %w", ty.Cron, path, err)
 		}
+	}
+
+	// Resolve send_output: default true if absent from YAML. Using *bool in
+	// TaskYAML avoids the Go zero-value trap (omitted field → false).
+	sendOutput := true
+	if ty.SendOutput != nil {
+		sendOutput = *ty.SendOutput
 	}
 
 	return &model.Task{
@@ -186,9 +250,31 @@ func LoadYAML(path string) (*model.Task, error) {
 		TargetID:   ty.TargetID,
 		Prompt:     ty.Prompt,
 		Enabled:    ty.Enabled,
+		SendOutput: sendOutput,
 		CreatedBy:  ty.CreatedBy,
 		CreatedAt:  ty.CreatedAt,
 	}, nil
+}
+
+// recordSentMessage writes the proactively-sent message to the messages table
+// so that conversation history is consistent when the user replies on the same channel.
+// Without this, Claude would have no memory of what it said between sessions.
+func (r *Runner) recordSentMessage(sessionID, content, feishuMsgID string) {
+	m := &model.Message{
+		ID:          uuid.New().String(),
+		SessionID:   sessionID,
+		SenderID:    "",
+		Role:        "assistant",
+		Content:     content,
+		FeishuMsgID: feishuMsgID,
+		CreatedAt:   time.Now(),
+	}
+	if err := r.db.Create(m).Error; err != nil {
+		// Message was already delivered to Feishu; DB failure causes amnesia
+		// (Claude won't see this message next session) but is not user-visible.
+		slog.Error("task runner: record sent message",
+			"err", err, "session_id", sessionID, "content_len", len(content))
+	}
 }
 
 func buildChannelKey(targetType, targetID, appID string) string {

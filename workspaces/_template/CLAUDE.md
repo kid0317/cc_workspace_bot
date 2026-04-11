@@ -60,7 +60,7 @@
 → 有任务：引导补充 cron 时间和发送目标，写入 `tasks/` 目录。
 → 暂无：记录在 `memory/MEMORY.md`，标记该项为完成。
 
-> **推荐默认任务**：每月 1 日凌晨 2 点执行记忆归档（`cron: "0 2 1 * *"`），prompt 参考 `skills/memory.md` 的【定期归档】章节。如用户感兴趣，在收集到飞书发送目标（第 5 项）后自动创建此任务。
+> **推荐默认任务**：每月 1 日凌晨 2 点执行记忆归档（`cron: "0 2 1 * *"`），prompt 参考 `.claude/skills/memory/SKILL.md` 的【定期归档】章节。如用户感兴趣，在收集到飞书发送目标（第 5 项）后自动创建此任务。
 
 ### 第 4 项：工作模式（可选）
 ```
@@ -126,22 +126,26 @@
 
 | 技能 | 文件 | 触发场景 |
 |------|------|---------|
-| 飞书操作 | `skills/feishu_ops/SKILL.md` | 发消息、读文档、写表格、管日历、建多维表格 |
-| 长记忆 | `skills/memory.md` | 需要跨 session 保存信息时 |
-| 定时任务 | `skills/task.md` | 用户要求创建自动化定时任务时 |
-| 事件记录 | `skills/cases.md` | 用户描述具体事件 / 需要检索历史案例时 |
-| 待办管理 | `skills/todo.md` | 添加/查看/完成待办、收工记日志、回顾历史工作 |
-| 感悟记录 | `skills/insights.md` | 记录碎片化感悟、按月归档、分类检索回顾 |
-| 历史对话检索 | `skills/chat_history.md` | 用户查询历史聊天记录、回顾指定关键词/时间段的对话 |
+| 飞书操作 | `.claude/skills/feishu_ops/SKILL.md` | 发消息、读文档、写表格、管日历、建多维表格 |
+| 长记忆 | `.claude/skills/memory/SKILL.md` | 需要跨 session 保存信息时 |
+| 定时任务 | `.claude/skills/task/SKILL.md` | 用户要求创建自动化定时任务时 |
+| 事件记录 | `.claude/skills/cases/SKILL.md` | 用户描述具体事件 / 需要检索历史案例时 |
+| 待办管理 | `.claude/skills/todo/SKILL.md` | 添加/查看/完成待办、收工记日志、回顾历史工作 |
+| 感悟记录 | `.claude/skills/insights/SKILL.md` | 记录碎片化感悟、按月归档、分类检索回顾 |
+| 历史对话检索 | `.claude/skills/chat_history/SKILL.md` | 用户查询历史聊天记录、回顾指定关键词/时间段的对话 |
+
+### 新建技能规范
+
+创建新 skill 前，先调用 `/skill-creater` 加载创建规范。所有 skill 必须放在当前工作空间的 `.claude/skills/<skill-name>/` 目录下，包含 `SKILL.md`（含 frontmatter）及所需脚本。
 
 ---
 
 ## 核心操作规范
 
 1. **路径**：所有文件操作使用绝对路径（从 SESSION_CONTEXT.md 读取，不硬编码）。
-2. **长记忆**：重要信息按 `skills/memory.md` 规范写入 memory 目录（flock 加锁）。
-3. **定时任务**：按 `skills/task.md` 规范写入 tasks 目录。
-4. **飞书操作**：调用 `skills/feishu_ops/scripts/` 中的 Python 脚本；`routing_key` 从 `<system_routing>` 块读取。
+2. **长记忆**：重要信息按 `.claude/skills/memory/SKILL.md` 规范写入 memory 目录（flock 加锁）。
+3. **定时任务**：按 `.claude/skills/task/SKILL.md` 规范写入 tasks 目录。
+4. **飞书操作**：调用 `.claude/skills/feishu_ops/scripts/` 中的 Python 脚本；`routing_key` 从 `<system_routing>` 块读取。
 
 ---
 

@@ -64,11 +64,11 @@ func TestParseChannelKey(t *testing.T) {
 
 func TestReceiveTarget(t *testing.T) {
 	tests := []struct {
-		name           string
-		targetType     string
-		targetID       string
-		wantID         string
-		wantIDType     string
+		name       string
+		targetType string
+		targetID   string
+		wantID     string
+		wantIDType string
 	}{
 		{"p2p with ou_ returns open_id", "p2p", "ou_abc", "ou_abc", "open_id"},
 		{"p2p with oc_ returns chat_id", "p2p", "oc_abc", "oc_abc", "chat_id"},
@@ -103,26 +103,27 @@ func writeYAML(t *testing.T, dir, name, content string) string {
 func TestLoadYAML_Valid(t *testing.T) {
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "task1.yaml", `
-id: "abc-123"
-app_id: "app1"
 name: "Daily report"
 cron: "0 9 * * 1-5"
 target_type: "p2p"
 target_id: "ou_user1"
 prompt: "Generate daily report"
 enabled: true
+send_output: true
 `)
 
-	task, err := LoadYAML(path)
+	task, err := LoadYAML(path, "injected-app")
 	if err != nil {
 		t.Fatalf("LoadYAML() error = %v", err)
 	}
 
-	if task.ID != "abc-123" {
-		t.Errorf("ID = %q, want abc-123", task.ID)
+	// ID is derived from filename, not from the YAML id field.
+	if task.ID != "task1" {
+		t.Errorf("ID = %q, want %q (derived from filename)", task.ID, "task1")
 	}
-	if task.AppID != "app1" {
-		t.Errorf("AppID = %q, want app1", task.AppID)
+	// AppID is injected by caller, not from YAML.
+	if task.AppID != "injected-app" {
+		t.Errorf("AppID = %q, want %q (injected, not from YAML)", task.AppID, "injected-app")
 	}
 	if task.Name != "Daily report" {
 		t.Errorf("Name = %q, want 'Daily report'", task.Name)
@@ -133,12 +134,16 @@ enabled: true
 	if !task.Enabled {
 		t.Error("Enabled should be true")
 	}
+	if !task.SendOutput {
+		t.Error("SendOutput should be true when send_output: true in YAML")
+	}
 }
 
-func TestLoadYAML_EmptyIDGeneratesUUID(t *testing.T) {
+// TestLoadYAML_IDDerivedFromFilename verifies that the task ID is always the
+// filename stem, regardless of what the YAML id field contains.
+func TestLoadYAML_IDDerivedFromFilename(t *testing.T) {
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "task2.yaml", `
-app_id: "app1"
 name: "No ID task"
 cron: "* * * * *"
 target_type: "group"
@@ -147,21 +152,42 @@ prompt: "Hello"
 enabled: true
 `)
 
-	task, err := LoadYAML(path)
+	task, err := LoadYAML(path, "app1")
 	if err != nil {
 		t.Fatalf("LoadYAML() error = %v", err)
 	}
 
-	if task.ID == "" {
-		t.Error("ID should be auto-generated, got empty string")
+	if task.ID != "task2" {
+		t.Errorf("ID = %q, want %q (derived from filename)", task.ID, "task2")
+	}
+}
+
+// TestLoadYAML_SendOutputDefaultsTrue verifies that omitting send_output in
+// YAML produces SendOutput=true (not the Go zero value false).
+func TestLoadYAML_SendOutputDefaultsTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "default_output.yaml", `
+name: "Default output task"
+cron: "0 * * * *"
+target_type: "p2p"
+target_id: "ou_user1"
+prompt: "Do something"
+enabled: true
+`)
+
+	task, err := LoadYAML(path, "app1")
+	if err != nil {
+		t.Fatalf("LoadYAML() error = %v", err)
+	}
+
+	if !task.SendOutput {
+		t.Error("SendOutput should default to true when send_output is absent from YAML")
 	}
 }
 
 func TestLoadYAML_InvalidCron(t *testing.T) {
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "bad_cron.yaml", `
-id: "x"
-app_id: "app1"
 name: "Bad cron"
 cron: "not a cron expression"
 target_type: "p2p"
@@ -170,7 +196,7 @@ prompt: "Test"
 enabled: true
 `)
 
-	_, err := LoadYAML(path)
+	_, err := LoadYAML(path, "app1")
 	if err == nil {
 		t.Error("LoadYAML() with invalid cron should return error")
 	}
@@ -181,24 +207,24 @@ func TestLoadYAML_InvalidYAML(t *testing.T) {
 	// Unclosed flow sequence — yaml.v3 will return a parse error.
 	path := writeYAML(t, dir, "bad.yaml", "[unclosed yaml")
 
-	_, err := LoadYAML(path)
+	_, err := LoadYAML(path, "app1")
 	if err == nil {
 		t.Error("LoadYAML() with invalid YAML should return error")
 	}
 }
 
 func TestLoadYAML_FileNotFound(t *testing.T) {
-	_, err := LoadYAML("/nonexistent/path/task.yaml")
+	_, err := LoadYAML("/nonexistent/path/task.yaml", "app1")
 	if err == nil {
 		t.Error("LoadYAML() with missing file should return error")
 	}
 }
 
-func TestLoadYAML_EmptyCronIsAllowed(t *testing.T) {
+// TestLoadYAML_DisabledTaskAllowsEmptyCron verifies that a disabled task does
+// not require a cron expression — it won't be scheduled, so validation is skipped.
+func TestLoadYAML_DisabledTaskAllowsEmptyCron(t *testing.T) {
 	dir := t.TempDir()
 	path := writeYAML(t, dir, "nocron.yaml", `
-id: "y"
-app_id: "app1"
 name: "No cron"
 target_type: "p2p"
 target_id: "ou_user1"
@@ -206,11 +232,126 @@ prompt: "Test"
 enabled: false
 `)
 
-	task, err := LoadYAML(path)
+	task, err := LoadYAML(path, "app1")
 	if err != nil {
-		t.Fatalf("LoadYAML() with empty cron should not error: %v", err)
+		t.Fatalf("LoadYAML() disabled task with empty cron should not error: %v", err)
 	}
 	if task.CronExpr != "" {
 		t.Errorf("CronExpr = %q, want empty", task.CronExpr)
+	}
+}
+
+// TestLoadYAML_UnresolvedPlaceholder verifies that tasks containing unresolved
+// __PLACEHOLDER__ tokens are rejected, preventing silent execution failures.
+func TestLoadYAML_UnresolvedPlaceholder(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			"placeholder in target_id",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_type: "p2p"
+target_id: "__TARGET_ID__"
+prompt: "Hello"
+enabled: true
+`,
+		},
+		{
+			"placeholder in target_type",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_type: "__TARGET_TYPE__"
+target_id: "ou_abc"
+prompt: "Hello"
+enabled: true
+`,
+		},
+		{
+			"placeholder in prompt",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_type: "p2p"
+target_id: "ou_abc"
+prompt: "Run task for __WORKSPACE_DIR__"
+enabled: true
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeYAML(t, dir, "task.yaml", tt.content)
+			_, err := LoadYAML(path, "app1")
+			if err == nil {
+				t.Error("LoadYAML() with unresolved placeholder should return error")
+			}
+		})
+	}
+}
+
+// TestLoadYAML_RequiredFields verifies that missing required fields are rejected
+// before they can cause silent failures at task execution time.
+func TestLoadYAML_RequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			"missing target_type",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_id: "ou_abc"
+prompt: "Hello"
+enabled: true
+`,
+		},
+		{
+			"missing target_id",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_type: "p2p"
+prompt: "Hello"
+enabled: true
+`,
+		},
+		{
+			"missing prompt",
+			`
+name: "Test"
+cron: "0 9 * * *"
+target_type: "p2p"
+target_id: "ou_abc"
+enabled: true
+`,
+		},
+		{
+			"missing cron for enabled task",
+			`
+name: "Test"
+target_type: "p2p"
+target_id: "ou_abc"
+prompt: "Hello"
+enabled: true
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeYAML(t, dir, "task.yaml", tt.content)
+			_, err := LoadYAML(path, "app1")
+			if err == nil {
+				t.Errorf("LoadYAML() with %s should return error", tt.name)
+			}
+		})
 	}
 }

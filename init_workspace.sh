@@ -99,7 +99,7 @@ step "初始化 workspace 目录结构"
 
 mkdir -p \
     "$WORKSPACE_DIR" \
-    "$WORKSPACE_DIR/skills" \
+    "$WORKSPACE_DIR/.claude/skills" \
     "$WORKSPACE_DIR/memory" \
     "$WORKSPACE_DIR/tasks" \
     "$WORKSPACE_DIR/sessions"
@@ -116,7 +116,7 @@ info "目录结构就绪: $WORKSPACE_DIR"
 # ── 写入飞书凭证 ──────────────────────────────────────────────────────────────
 step "写入飞书凭证"
 
-FEISHU_OPS_DIR="$WORKSPACE_DIR/skills/feishu_ops"
+FEISHU_OPS_DIR="$WORKSPACE_DIR/.claude/skills/feishu_ops"
 mkdir -p "$FEISHU_OPS_DIR"
 
 FEISHU_JSON="$FEISHU_OPS_DIR/feishu.json"
@@ -126,11 +126,30 @@ else
     cat > "$FEISHU_JSON" << EOF
 {
   "app_id": "${FEISHU_APP_ID}",
-  "app_secret": "${FEISHU_APP_SECRET}"
+  "app_secret": "${FEISHU_APP_SECRET}",
+  "lark_profile": "${APP_ID}"
 }
 EOF
     chmod 600 "$FEISHU_JSON"
-    info "写入 skills/feishu_ops/feishu.json（0600）"
+    info "写入 .claude/skills/feishu_ops/feishu.json（0600，含 lark_profile）"
+fi
+
+# ── 注册 lark-cli profile ─────────────────────────────────────────────────────
+step "注册 lark-cli profile"
+
+if command -v lark-cli &>/dev/null; then
+    if lark-cli profile list 2>/dev/null | \
+        python3 -c "import sys,json; names=[p['name'] for p in json.load(sys.stdin)]; exit(0 if '${APP_ID}' in names else 1)" 2>/dev/null; then
+        warn "lark-cli profile '${APP_ID}' 已存在，跳过注册"
+    else
+        echo "${FEISHU_APP_SECRET}" | lark-cli config init \
+            --name "${APP_ID}" \
+            --app-id "${FEISHU_APP_ID}" \
+            --app-secret-stdin
+        info "lark-cli profile '${APP_ID}' 注册完成"
+    fi
+else
+    warn "lark-cli 未安装，跳过 profile 注册（运行 'npm install -g @larksuite/cli' 后手动补注册）"
 fi
 
 # ── 复制模版文件 ───────────────────────────────────────────────────────────────
@@ -179,8 +198,8 @@ NEW_APP_BLOCK="  - id: \"${APP_ID}\"
     allowed_chats: []
     claude:
       permission_mode: \"acceptEdits\"
+      model: \"haiku\"          # 默认使用 haiku（可改为 sonnet/opus）
       # provider: \"bailian\"   # 覆盖默认供应商（可选）；对应 providers 中的 key
-      # model: \"sonnet\"       # 覆盖供应商默认模型（可选）；别名: sonnet/opus/haiku
       allowed_tools:
         - \"Bash\"
         - \"Read\"
@@ -231,5 +250,5 @@ echo "  3. 在飞书中向新应用发消息，说「初始化」开始配置"
 echo ""
 echo -e "${YELLOW}注意：${NC}"
 echo "  - config.yaml 备份于 $(basename "$BACKUP_FILE")"
-echo "  - 飞书凭证已写入 ${WORKSPACE_DIR}/skills/feishu_ops/feishu.json（0600）"
+echo "  - 飞书凭证已写入 ${WORKSPACE_DIR}/.claude/skills/feishu_ops/feishu.json（0600）"
 echo "  - 服务尚未重启，新 workspace 在下次启动时生效"

@@ -1,0 +1,18 @@
+# 生活日志生成定时任务模板
+# 每4小时触发一次，模拟角色的日常生活片段。
+# 由 Claude 在 phase2_done 时从 SESSION_CONTEXT.md 解析占位符后写入 tasks/ 目录。
+#
+# 注意：
+# - id 字段由文件名自动推断（life_sim.yaml → id: life_sim），无需填写
+# - app_id 由 Watcher 从文件路径推断，无需填写
+# - send_output: false 表示此任务产出不发送给用户（后台静默执行）
+
+name: life_simulation
+target_type: __TARGET_TYPE__   # p2p 或 group（从 SESSION_CONTEXT.md Channel key 解析）
+target_id: __TARGET_ID__       # 从 Channel key 提取
+cron: "0 */4 * * *"            # 每4小时触发（0/4/8/12/16/20时）
+enabled: true
+send_output: false             # 后台任务：禁止向用户发送任何文字
+prompt: |
+  加载 __WORKSPACE_DIR__/.claude/skills/life_sim/SKILL.md，执行生活日志生成流程。
+  先掷骰子决定是否生成（夜间20%，其他时段60%），不生成时静默退出。

@@ -11,13 +11,13 @@ import (
 
 // Init ensures the workspace directory exists and has the required subdirectories.
 // If a _template directory is provided, it copies templates on first init.
-// feishuAppID and feishuAppSecret are written to skills/feishu_ops/feishu.json so that
+// feishuAppID and feishuAppSecret are written to .claude/skills/feishu_ops/feishu.json so that
 // feishu_ops scripts can authenticate without exposing credentials to the LLM.
 func Init(workspaceDir string, templateDir string, feishuAppID, feishuAppSecret string) error {
 	// Create required subdirectories.
 	dirs := []string{
 		workspaceDir,
-		filepath.Join(workspaceDir, "skills"),
+		filepath.Join(workspaceDir, ".claude", "skills"),
 		filepath.Join(workspaceDir, "memory"),
 		filepath.Join(workspaceDir, "tasks"),
 		filepath.Join(workspaceDir, "sessions"),
@@ -36,7 +36,7 @@ func Init(workspaceDir string, templateDir string, feishuAppID, feishuAppSecret 
 		}
 	}
 
-	// Write skills/feishu_ops/feishu.json if credentials are provided.
+	// Write .claude/skills/feishu_ops/feishu.json if credentials are provided.
 	if feishuAppID != "" && feishuAppSecret != "" {
 		if err := writeFeishuConfig(workspaceDir, feishuAppID, feishuAppSecret); err != nil {
 			return fmt.Errorf("write feishu config: %w", err)
@@ -53,10 +53,10 @@ func Init(workspaceDir string, templateDir string, feishuAppID, feishuAppSecret 
 	return nil
 }
 
-// writeFeishuConfig writes feishu credentials to {workspace}/skills/feishu_ops/feishu.json.
+// writeFeishuConfig writes feishu credentials to {workspace}/.claude/skills/feishu_ops/feishu.json.
 // The file sits next to the scripts that consume it, making path resolution trivial.
 func writeFeishuConfig(workspaceDir, appID, appSecret string) error {
-	feishuOpsDir := filepath.Join(workspaceDir, "skills", "feishu_ops")
+	feishuOpsDir := filepath.Join(workspaceDir, ".claude", "skills", "feishu_ops")
 	if err := os.MkdirAll(feishuOpsDir, 0o755); err != nil {
 		return fmt.Errorf("create feishu_ops dir: %w", err)
 	}

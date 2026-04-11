@@ -112,13 +112,13 @@ func main() {
 
 	for _, appCfg := range cfg.Apps {
 		tasksDir := filepath.Join(appCfg.WorkspaceDir, "tasks")
-		if err := taskWatcher.AddDir(tasksDir); err != nil {
+		if err := taskWatcher.AddDir(tasksDir, appCfg.ID); err != nil {
 			// M-7: close the watcher FD on error to prevent leaks.
 			taskWatcher.Close()
 			slog.Error("watch tasks dir", "dir", tasksDir, "err", err)
 			os.Exit(1)
 		}
-		restoreEnabledTasks(ctx, database, appCfg.ID, taskScheduler)
+		restoreEnabledTasks(ctx, database, appCfg.ID, tasksDir, taskScheduler)
 	}
 
 	if _, err := task.NewCleaner(database, cfg.Apps, cfg.Cleanup, taskScheduler); err != nil {
@@ -201,7 +201,9 @@ func (f *dispatchForwarder) Dispatch(ctx context.Context, msg *feishu.IncomingMe
 func syncAppChannels(_ *gorm.DB, _ *config.AppConfig) {}
 
 // restoreEnabledTasks loads enabled tasks from DB and re-registers them with the scheduler.
-func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, sched *task.Scheduler) {
+// D3: logs WARN (not Info) when no tasks are found, since companion workspaces are
+// expected to have at least one scheduled task; zero tasks indicates misconfiguration.
+func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, tasksDir string, sched *task.Scheduler) {
 	var tasks []model.Task
 	if err := database.Where("app_id = ? AND enabled = ?", appID, true).Find(&tasks).Error; err != nil {
 		slog.Error("restore tasks", "app_id", appID, "err", err)
@@ -213,5 +215,10 @@ func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, s
 			slog.Warn("restore task job", "task_id", t.ID, "err", err)
 		}
 	}
-	slog.Info("restored tasks", "app_id", appID, "count", len(tasks))
+	if len(tasks) == 0 {
+		slog.Warn("restored tasks: none found — proactive features disabled for this workspace",
+			"app_id", appID, "tasks_dir", tasksDir)
+	} else {
+		slog.Info("restored tasks", "app_id", appID, "count", len(tasks), "tasks_dir", tasksDir)
+	}
 }
