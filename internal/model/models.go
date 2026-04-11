@@ -47,11 +47,16 @@ type Task struct {
 	TargetType string // p2p / group
 	TargetID   string // open_id or chat_id
 	Prompt     string `gorm:"type:text"`
-	Enabled    bool   `gorm:"default:true"`
+	Enabled    bool   `gorm:"not null;default:true"`
 	// SendOutput controls whether Claude's text output is forwarded to the user.
 	// Set to false for background tasks (memory_distill, life_sim) that must
 	// never surface internal results to users.
-	SendOutput bool       `gorm:"default:true"`
+	// IMPORTANT: no gorm:"default:true" here — GORM skips bool=false (zero value)
+	// when a struct-tag default is present, causing the DB DEFAULT to override an
+	// explicit false set by LoadYAML (the original RC-4 regression).
+	// The DB column retains DEFAULT true for rows inserted outside Go; LoadYAML
+	// always sets this field explicitly, so the struct-tag default is not needed.
+	SendOutput bool `gorm:"column:send_output;not null"`
 	CreatedBy  string
 	CreatedAt  time.Time
 	LastRunAt  *time.Time

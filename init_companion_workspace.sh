@@ -212,7 +212,7 @@ else
 fi
 
 # ── 替换占位符 ────────────────────────────────────────────────────────────────
-step "替换文件占位符（settings.local.json + tasks/*.yaml）"
+step "替换文件占位符（settings.local.json + .claude/task_templates/*.yaml）"
 
 SETTINGS_JSON="$WORKSPACE_DIR/.claude/settings.local.json"
 if [[ -f "$SETTINGS_JSON" ]]; then
@@ -222,19 +222,21 @@ else
     warn "settings.local.json 不存在，跳过"
 fi
 
-# 替换 tasks/*.yaml 中的占位符
-# __TARGET_TYPE__ 和 __TARGET_ID__ 在初始化阶段二完成后由 Claude 更新，这里仅替换已知值
-YAML_COUNT=0
+# 替换 .claude/task_templates/*.yaml 中的 __WORKSPACE_DIR__ 占位符。
+# 注意：id / app_id 字段已废弃（由系统从文件名/路径派生，RC-1 根因），不再替换。
+# __TARGET_TYPE__ 和 __TARGET_ID__ 由 Claude 在 phase2_done 阶段从 SESSION_CONTEXT.md
+# 解析 channel_key 后写入 tasks/，init 脚本不提前替换。
+TMPL_COUNT=0
 while IFS= read -r -d '' yaml_file; do
-    sed -i         -e "s|__WORKSPACE_DIR__|$WORKSPACE_DIR|g"         -e "s|__APP_ID__|$APP_ID|g"         -e "s|__FEISHU_APP_ID__|$FEISHU_APP_ID|g"         "$yaml_file"
-    YAML_COUNT=$((YAML_COUNT + 1))
-done < <(find "$WORKSPACE_DIR/tasks" -name "*.yaml" -type f -print0 2>/dev/null)
+    sed -i -e "s|__WORKSPACE_DIR__|$WORKSPACE_DIR|g" "$yaml_file"
+    TMPL_COUNT=$((TMPL_COUNT + 1))
+done < <(find "$WORKSPACE_DIR/.claude/task_templates" -name "*.yaml" -type f -print0 2>/dev/null)
 
-if [[ $YAML_COUNT -gt 0 ]]; then
-    info "tasks/*.yaml 已替换 __APP_ID__, __FEISHU_APP_ID__, __WORKSPACE_DIR__（共 $YAML_COUNT 个文件）"
-    warn "__TARGET_TYPE__ 和 __TARGET_ID__ 将在初始化阶段二完成后由 Claude 自动填写"
+if [[ $TMPL_COUNT -gt 0 ]]; then
+    info ".claude/task_templates/*.yaml 已替换 __WORKSPACE_DIR__（共 $TMPL_COUNT 个文件）"
+    info "__TARGET_TYPE__ / __TARGET_ID__ 将在 phase2_done 时由 Claude 从 SESSION_CONTEXT.md 解析后填入 tasks/"
 else
-    warn "tasks/ 目录下未找到 yaml 文件，跳过"
+    warn ".claude/task_templates/ 下未找到 yaml 文件，跳过"
 fi
 
 # ── 追加到 config.yaml ────────────────────────────────────────────────────────
@@ -298,5 +300,6 @@ echo ""
 echo -e "${YELLOW}注意：${NC}"
 echo "  - config.yaml 备份于 $(basename "$BACKUP_FILE")"
 echo "  - 飞书凭证已写入 ${WORKSPACE_DIR}/.claude/skills/feishu_ops/feishu.json（0600）"
-echo "  - settings.local.json 和 tasks/*.yaml 中的占位符已替换"
+echo "  - settings.local.json 和 .claude/task_templates/*.yaml 中 __WORKSPACE_DIR__ 已替换"
+echo "  - tasks/ 目录为空（.gitkeep）；任务文件在 phase2_done 由 Claude 从模板生成"
 echo "  - 使用 sonnet 模型（比 haiku 成本更高，角色一致性更好）"
