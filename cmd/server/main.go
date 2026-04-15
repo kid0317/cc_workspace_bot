@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -110,6 +112,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Migrate legacy task IDs to the canonical "app_id/slug" format.
+	// Must run before restoreEnabledTasks so that restored records use new IDs.
+	task.MigrateTaskIDs(database)
+
 	for _, appCfg := range cfg.Apps {
 		tasksDir := filepath.Join(appCfg.WorkspaceDir, "tasks")
 		if err := taskWatcher.AddDir(tasksDir, appCfg.ID); err != nil {
@@ -201,6 +207,9 @@ func (f *dispatchForwarder) Dispatch(ctx context.Context, msg *feishu.IncomingMe
 func syncAppChannels(_ *gorm.DB, _ *config.AppConfig) {}
 
 // restoreEnabledTasks loads enabled tasks from DB and re-registers them with the scheduler.
+// If no DB records exist, it falls back to scanning YAML files in tasksDir and upserting
+// them — this handles the case where the tasks/ directory was deleted and recreated
+// (causing fsnotify to lose its watch), leaving files on disk but no DB records.
 // D3: logs WARN (not Info) when no tasks are found, since companion workspaces are
 // expected to have at least one scheduled task; zero tasks indicates misconfiguration.
 func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, tasksDir string, sched *task.Scheduler) {
@@ -209,6 +218,15 @@ func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, t
 		slog.Error("restore tasks", "app_id", appID, "err", err)
 		return
 	}
+
+	// Fallback: if DB has no enabled tasks, scan YAML files and upsert them.
+	// This recovers from the scenario where tasks/ was deleted+recreated while
+	// the server was running (fsnotify loses the watch on the new inode) and the
+	// server is subsequently restarted with an empty tasks table.
+	if len(tasks) == 0 {
+		tasks = syncYAMLTasksToDB(ctx, database, appID, tasksDir)
+	}
+
 	for i := range tasks {
 		t := &tasks[i]
 		if err := sched.Add(ctx, t); err != nil {
@@ -221,4 +239,61 @@ func restoreEnabledTasks(ctx context.Context, database *gorm.DB, appID string, t
 	} else {
 		slog.Info("restored tasks", "app_id", appID, "count", len(tasks), "tasks_dir", tasksDir)
 	}
+}
+
+// syncYAMLTasksToDB scans tasksDir for *.yaml files, upserts each valid enabled task
+// into the DB, and returns the resulting task list. Errors per file are logged and skipped.
+func syncYAMLTasksToDB(ctx context.Context, database *gorm.DB, appID string, tasksDir string) []model.Task {
+	entries, err := os.ReadDir(tasksDir)
+	if err != nil {
+		// Directory may not exist yet — not an error worth surfacing at WARN level.
+		return nil
+	}
+
+	var restored []model.Task
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(tasksDir, e.Name())
+		t, err := task.LoadYAML(path, appID)
+		if err != nil {
+			slog.Warn("restore tasks: skip invalid yaml", "file", path, "err", err)
+			continue
+		}
+		if !t.Enabled {
+			continue
+		}
+		// Upsert: restore previously-deleted records (Unscoped) or create new ones.
+		var existing model.Task
+		dbErr := database.Unscoped().Where("id = ?", t.ID).First(&existing).Error
+		if errors.Is(dbErr, gorm.ErrRecordNotFound) {
+			if err := database.Create(t).Error; err != nil {
+				slog.Error("restore tasks: create task", "task_id", t.ID, "err", err)
+				continue
+			}
+		} else if dbErr != nil {
+			slog.Error("restore tasks: query task", "task_id", t.ID, "err", dbErr)
+			continue
+		} else {
+			updates := map[string]interface{}{
+				"name":        t.Name,
+				"app_id":      t.AppID,
+				"cron_expr":   t.CronExpr,
+				"target_type": t.TargetType,
+				"target_id":   t.TargetID,
+				"prompt":      t.Prompt,
+				"enabled":     t.Enabled,
+				"send_output": t.SendOutput,
+				"deleted_at":  gorm.Expr("NULL"),
+			}
+			if err := database.Model(&existing).Unscoped().Updates(updates).Error; err != nil {
+				slog.Error("restore tasks: update task", "task_id", t.ID, "err", err)
+				continue
+			}
+		}
+		slog.Info("restore tasks: recovered from yaml", "task_id", t.ID, "name", t.Name)
+		restored = append(restored, *t)
+	}
+	return restored
 }

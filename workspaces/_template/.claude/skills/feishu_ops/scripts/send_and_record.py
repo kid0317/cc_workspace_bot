@@ -14,8 +14,8 @@
 import argparse
 import sqlite3
 import sys
-import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -45,7 +45,7 @@ def main() -> None:
         auth.output_error(f"db_path 不存在：{args.db_path}")
 
     msg_id = str(uuid.uuid4())
-    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+    now_iso = datetime.now().astimezone().isoformat(timespec='seconds')
 
     try:
         conn = sqlite3.connect(str(db_path))

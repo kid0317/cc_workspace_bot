@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -118,6 +119,11 @@ func (c *Config) Validate() error {
 	for _, app := range c.Apps {
 		if app.ID == "" {
 			return fmt.Errorf("config: app is missing 'id'")
+		}
+		// "/" is the namespace separator in task IDs ("{app_id}/{filename}").
+		// Allowing it here would make the separator ambiguous and break migration.
+		if strings.Contains(app.ID, "/") {
+			return fmt.Errorf("config: app id %q must not contain '/'", app.ID)
 		}
 		if app.FeishuAppID == "" {
 			return fmt.Errorf("config: app %q is missing 'feishu_app_id'", app.ID)

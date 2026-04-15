@@ -19,32 +19,38 @@ inject_history.py — UserPromptSubmit hook for companion workspace.
 import sqlite3
 import os
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 RECENT_N = 20  # 最近 N 条消息（user + assistant 各算一条）
 
 
 def parse_timestamp(ts_val) -> str:
-    """安全地将 SQLite 时间戳转为 YYYY-MM-DD 字符串。
+    """安全地将 SQLite 时间戳转为 YYYY-MM-DD HH:MM 字符串。
+    保留小时和分钟，供 CLAUDE.md 计算距上次对话的时间间隔（区分"6小时前"和"30分钟前"）。
     SQLite 可能存储 RFC3339 字符串、ISO 字符串或 Unix 整数/浮点。
     """
     if ts_val is None:
         return "unknown"
     s = str(ts_val).strip()
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S+00:00",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-    ):
+    # 优先用 fromisoformat 解析（Python 3.7+，兼容所有 ISO 8601 变体）
+    for candidate in (s, s.rstrip("Z"), s.replace("T", " ")):
         try:
-            return datetime.strptime(s[: len(fmt)], fmt).strftime("%Y-%m-%d")
+            dt = datetime.fromisoformat(candidate)
+            # 有时区信息（如 +00:00 UTC 或 +08:00 CST）→ 统一转换为本地时间显示
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            return dt.strftime("%Y-%m-%d %H:%M")
         except ValueError:
             continue
+    # 兜底：Unix 时间戳（整数或浮点）→ 直接用本地时间
     try:
-        return datetime.fromtimestamp(float(s), tz=timezone.utc).strftime("%Y-%m-%d")
+        dt = datetime.fromtimestamp(float(s))  # fromtimestamp() 默认返回本地时间
+        return dt.strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError):
         pass
+    # 最后兜底：截取前16字符（YYYY-MM-DD HH:MM 或 YYYY-MM-DDTHH:MM）
+    if len(s) >= 16 and s[:4].isdigit() and s[4] == "-":
+        return s[:16].replace("T", " ")
     if len(s) >= 10 and s[:4].isdigit() and s[4] == "-":
         return s[:10]
     return "unknown"

@@ -1,0 +1,16 @@
+# 角色参数校准定时任务模板
+# 由 Claude 在初始化完成（phase2_done → done）时，与其他三个定时任务一并写入 tasks/ 目录。
+#
+# 注意：
+# - id 字段由文件名自动推断（calibrate_params.yaml → id: calibrate_params），无需填写
+# - app_id 由 Watcher 从文件路径推断，无需填写
+# - send_output: false，纯后台操作，不产生用户可见输出
+
+name: calibrate_params
+cron: "0 3 1,8,15,22 * *"  # 每月1/8/15/22日凌晨3点（近似每7天）；persona 更新时 checksum 机制会实时同步，无需更频繁
+enabled: true
+send_output: false
+prompt: |
+  加载 __WORKSPACE_DIR__/.claude/skills/calibrate_params/SKILL.md，执行角色参数校准。
+  基于 persona.md 的 personality_dims 重新计算并写入 character_params.yaml。
+  全程静默，不产生任何前台输出。

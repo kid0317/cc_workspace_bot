@@ -24,6 +24,18 @@ const (
 	statusArchived = "archived"
 )
 
+// senderIface abstracts the Feishu sender for testing.
+type senderIface interface {
+	SendText(ctx context.Context, receiveID, receiveType, text string) (string, error)
+	SendThinking(ctx context.Context, receiveID, receiveType string) (string, error)
+	UpdateCard(ctx context.Context, messageID, text string) error
+	SendCard(ctx context.Context, receiveID, receiveIDType, text string) (string, error)
+}
+
+// claudeResult mirrors claude.ExecuteResult for internal use; the concrete type
+// is used in production but this alias allows tests to construct values directly.
+type claudeResult = claude.ExecuteResult
+
 // Worker processes messages for a single channel serially.
 // It is lazily started on first message and exits after idleTimeout.
 type Worker struct {
@@ -31,8 +43,10 @@ type Worker struct {
 	appCfg      *config.AppConfig
 	db          *gorm.DB
 	executor    *claude.Executor
-	sender      *feishu.Sender
+	sender      *feishu.Sender  // kept for backward-compat with newWorker callers
+	senderIface senderIface     // used by all send helpers; set from sender in newWorker
 	idleTimeout time.Duration
+	segmentOpts SegmentOptions  // must be initialised via DefaultSegmentOptions()
 
 	queue  chan *feishu.IncomingMessage
 	stopCh chan struct{}
@@ -57,10 +71,20 @@ func newWorker(
 		db:          db,
 		executor:    executor,
 		sender:      sender,
+		senderIface: sender,
 		idleTimeout: idleTimeout,
+		segmentOpts: DefaultSegmentOptions(),
 		queue:       make(chan *feishu.IncomingMessage, 64),
 		stopCh:      make(chan struct{}),
 	}
+}
+
+// isRateLimitError reports whether err is a Feishu rate-limit error (code 99991400).
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "99991400")
 }
 
 // run is the worker's main goroutine. It blocks until idle or ctx done.
@@ -153,7 +177,7 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	if isAttachmentOnly(msg.Prompt) {
 		w.pendingAttachmentPrompts = append(w.pendingAttachmentPrompts, msg.Prompt)
 		reply := attachmentReplyText(msg.Prompt)
-		if _, err := w.sender.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply); err != nil {
+		if _, err := w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply); err != nil {
 			slog.Error("send attachment ack", "err", err)
 		}
 		return
@@ -205,7 +229,7 @@ func (w *Worker) runClaude(ctx context.Context, sess *model.Session, msg *feishu
 
 // sendThinkingCard posts the initial "thinking..." card and returns its message ID.
 func (w *Worker) sendThinkingCard(ctx context.Context, msg *feishu.IncomingMessage) string {
-	cardMsgID, err := w.sender.SendThinking(ctx, msg.ReceiveID, msg.ReceiveType)
+	cardMsgID, err := w.senderIface.SendThinking(ctx, msg.ReceiveID, msg.ReceiveType)
 	if err != nil {
 		slog.Error("send thinking card", "err", err)
 	}
@@ -213,28 +237,86 @@ func (w *Worker) sendThinkingCard(ctx context.Context, msg *feishu.IncomingMessa
 }
 
 // persistResult saves the claude_session_id and the assistant message to DB.
+// [[SEND]] markers are stripped before storing to keep DB and resume context clean.
 func (w *Worker) persistResult(sess *model.Session, result *claude.ExecuteResult) {
 	if result.ClaudeSessionID != "" && sess.ClaudeSessionID == "" {
 		if err := w.db.Model(sess).Update("claude_session_id", result.ClaudeSessionID).Error; err != nil {
 			slog.Error("update claude_session_id", "err", err)
 		}
 	}
-	w.recordMessage(sess.ID, "", "assistant", result.Text, "")
+	storedText := strings.ReplaceAll(result.Text, "[[SEND]]", "\n")
+	w.recordMessage(sess.ID, "", "assistant", storedText, "")
 }
 
-// sendResult updates the card or sends a plain text message with the final result.
+// sendResult updates the card (work mode) or sends segmented plain text (companion mode).
+// Routing is based on IsCompanion(), not cardMsgID, to handle the case where SendThinking
+// fails (cardMsgID=="") in work mode — we must not fall through to companion segmenting.
 func (w *Worker) sendResult(ctx context.Context, msg *feishu.IncomingMessage, cardMsgID, text string) {
 	if text == "" {
 		return // claude chose not to respond (expected in group chats)
 	}
+	if w.appCfg.IsCompanion() {
+		// Companion mode: split into segments and send each with a typing delay.
+		w.sendCompanionSegments(ctx, msg, text)
+		return
+	}
 	if cardMsgID != "" {
-		if err := w.sender.UpdateCard(ctx, cardMsgID, text); err != nil {
+		// Work mode: patch the thinking card with the final result.
+		if err := w.senderIface.UpdateCard(ctx, cardMsgID, text); err != nil {
 			slog.Error("update card", "err", err)
 		}
 		return
 	}
-	if _, err := w.sender.SendText(ctx, msg.ReceiveID, msg.ReceiveType, text); err != nil {
-		slog.Error("send text", "err", err)
+	// Work mode fallback: SendThinking failed earlier, send as plain text.
+	if _, err := w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, text); err != nil {
+		slog.Error("send text fallback", "err", err)
+	}
+}
+
+// sendCompanionSegments splits text into segments and sends each one with a
+// simulated typing delay. Errors on individual segments are logged and skipped;
+// ctx cancellation stops the loop immediately.
+func (w *Worker) sendCompanionSegments(ctx context.Context, msg *feishu.IncomingMessage, text string) {
+	segments := SplitSegments(text, w.segmentOpts)
+	if len(segments) == 0 {
+		return
+	}
+
+	var prev string
+	for i, seg := range segments {
+		delay := TypingDelay(prev, seg, i == 0, w.segmentOpts, nil)
+		select {
+		case <-ctx.Done():
+			slog.Warn("companion segment send cancelled",
+				"channel", w.channelKey, "sent", i, "total", len(segments))
+			return
+		case <-time.After(delay):
+		}
+
+		sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := w.senderIface.SendText(sendCtx, msg.ReceiveID, msg.ReceiveType, seg)
+		sendCancel()
+		if err != nil {
+			if isRateLimitError(err) {
+				// Back off before retry, but respect context cancellation.
+				select {
+				case <-ctx.Done():
+					slog.Warn("companion segment send cancelled during rate-limit backoff",
+						"channel", w.channelKey, "sent", i, "total", len(segments))
+					return
+				case <-time.After(500 * time.Millisecond):
+				}
+				sendCtx2, sendCancel2 := context.WithTimeout(ctx, 5*time.Second)
+				_, err = w.senderIface.SendText(sendCtx2, msg.ReceiveID, msg.ReceiveType, seg)
+				sendCancel2()
+			}
+			if err != nil {
+				slog.Error("send companion segment",
+					"err", err, "index", i, "total", len(segments))
+				// Log and continue; do not stop sending subsequent segments.
+			}
+		}
+		prev = seg
 	}
 }
 
@@ -243,10 +325,10 @@ func (w *Worker) replyError(ctx context.Context, msg *feishu.IncomingMessage, ca
 	slog.Error("claude execute", "err", err)
 	reply := fmt.Sprintf("❌ 执行出错：%s", err.Error())
 	if cardMsgID != "" {
-		_ = w.sender.UpdateCard(ctx, cardMsgID, reply)
+		_ = w.senderIface.UpdateCard(ctx, cardMsgID, reply)
 		return
 	}
-	_, _ = w.sender.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply)
+	_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply)
 }
 
 // recordMessage writes a message record to DB. Errors are logged, not propagated.
@@ -294,7 +376,7 @@ func (w *Worker) handleNew(ctx context.Context, msg *feishu.IncomingMessage) {
 		slog.Error("create new session", "err", err)
 	}
 
-	_, _ = w.sender.SendText(ctx, msg.ReceiveID, msg.ReceiveType, "✅ 已开启新会话")
+	_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, "✅ 已开启新会话")
 }
 
 // getOrCreateSession returns the active session for this channel, creating one if needed.

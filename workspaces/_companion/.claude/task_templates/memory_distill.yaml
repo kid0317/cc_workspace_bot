@@ -14,5 +14,6 @@ cron: "0 * * * *"              # 每小时整点触发
 enabled: true
 send_output: false             # 后台任务：禁止向用户发送任何文字
 prompt: |
-  加载 __WORKSPACE_DIR__/.claude/skills/memory_distill/SKILL.md，执行记忆提炼流程。
+  加载 __WORKSPACE_DIR__/.claude/skills/memory_distill/SKILL.md，以作者身份执行定时记忆提炼：
+  从历史对话中识别新信息，补充到人物档案和事件记录（不输出任何文字）。
   无新消息时静默退出，不写入任何内容。

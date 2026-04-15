@@ -191,10 +191,11 @@ func LoadYAML(path string, appID string) (*model.Task, error) {
 		return nil, fmt.Errorf("parse task yaml %s: %w", path, err)
 	}
 
-	// Derive task ID from filename so that watcher.removeTask (which uses the
-	// filename as the lookup key) always finds the correct DB record.
-	// The YAML id field is ignored to avoid ID mismatches on delete.
-	ty.ID = strings.TrimSuffix(filepath.Base(path), ".yaml")
+	// Task ID = "{app_id}/{filename_slug}" — computed entirely by the framework.
+	// This guarantees global uniqueness across workspaces regardless of what
+	// filename the model chooses (e.g. "proactive_reach", a UUID, a semantic name).
+	// The YAML id field is ignored (see TaskYAML.ID comment in model).
+	ty.ID = appID + "/" + strings.TrimSuffix(filepath.Base(path), ".yaml")
 
 	// D1: workspace ID is authoritative; ignore app_id from YAML.
 	ty.AppID = appID
@@ -309,3 +310,4 @@ func parseChannelKey(key string) (chatType, chatID string) {
 	}
 	return parts[0], parts[1]
 }
+

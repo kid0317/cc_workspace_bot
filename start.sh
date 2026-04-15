@@ -6,6 +6,15 @@ CONFIG="./config.yaml"
 LOG_OUT="./server.log"
 LOG_ERR="./server.log.wf"
 
+rotate_logs() {
+    TS=$(date +%Y%m%d_%H%M%S)
+    [ -s "$LOG_OUT" ] && mv "$LOG_OUT" "${LOG_OUT}.${TS}"
+    [ -s "$LOG_ERR" ] && mv "$LOG_ERR" "${LOG_ERR}.${TS}"
+    # Keep only the 10 most recent rotated logs
+    ls -t "${LOG_OUT}".* 2>/dev/null | tail -n +11 | xargs rm -f
+    ls -t "${LOG_ERR}".* 2>/dev/null | tail -n +11 | xargs rm -f
+}
+
 start() {
     if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -16,6 +25,7 @@ start() {
         rm -f "$PIDFILE"
     fi
 
+    rotate_logs
     nohup "$BINARY" -config "$CONFIG" >"$LOG_OUT" 2>"$LOG_ERR" &
     PID=$!
     echo $PID > "$PIDFILE"

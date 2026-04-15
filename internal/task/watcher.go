@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"gorm.io/gorm"
@@ -60,8 +61,14 @@ func (w *Watcher) AddDir(dir string, appID string) error {
 }
 
 // Start begins processing fsnotify events until ctx is cancelled.
+// It also runs a periodic rescan (every 2 minutes) to recover watches lost
+// when a tasks/ directory is deleted and recreated (e.g. during workspace
+// re-initialisation). inotify watches are inode-based: a new directory at
+// the same path has a different inode and is not automatically re-watched.
 func (w *Watcher) Start(ctx context.Context) {
 	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
 		for {
 			select {
 			case event, ok := <-w.watcher.Events:
@@ -79,12 +86,75 @@ func (w *Watcher) Start(ctx context.Context) {
 				}
 				slog.Error("task watcher error", "err", err)
 
+			case <-ticker.C:
+				w.rescanAll(ctx)
+
 			case <-ctx.Done():
 				_ = w.watcher.Close()
 				return
 			}
 		}
 	}()
+}
+
+// rescanAll verifies that every registered tasks/ directory is still being
+// watched (its inode may have changed after a delete+recreate), re-adds any
+// that have fallen off, and syncs all YAML files found on disk.
+func (w *Watcher) rescanAll(ctx context.Context) {
+	w.mu.RLock()
+	dirs := make(map[string]string, len(w.dirAppIDs))
+	for dir, appID := range w.dirAppIDs {
+		dirs[dir] = appID
+	}
+	w.mu.RUnlock()
+
+	watched := make(map[string]struct{})
+	for _, p := range w.watcher.WatchList() {
+		watched[p] = struct{}{}
+	}
+
+	for dir, appID := range dirs {
+		if _, ok := watched[dir]; !ok {
+			// Directory is no longer watched (deleted+recreated or inotify limit).
+			// Re-create if missing, then re-add the watch.
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				slog.Error("task watcher: rescan mkdir", "dir", dir, "err", err)
+				continue
+			}
+			if err := w.watcher.Add(dir); err != nil {
+				slog.Error("task watcher: rescan re-watch", "dir", dir, "err", err)
+				continue
+			}
+			slog.Warn("task watcher: re-established lost watch", "dir", dir, "app", appID)
+		}
+		// Sync all YAML files currently on disk for this directory.
+		w.syncDir(ctx, dir, appID)
+	}
+}
+
+// syncDir loads every YAML file in dir and upserts it into the scheduler.
+// Used both during rescan and on startup to catch files written while the
+// watch was not yet active.
+func (w *Watcher) syncDir(ctx context.Context, dir, appID string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Error("task watcher: sync dir read", "dir", dir, "err", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		task, err := LoadYAML(path, appID)
+		if err != nil {
+			slog.Error("task watcher: sync dir parse yaml", "file", path, "err", err)
+			continue
+		}
+		w.upsertTask(ctx, task)
+	}
 }
 
 func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
@@ -107,15 +177,20 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 		w.upsertTask(ctx, task)
 
 	case event.Op&fsnotify.Remove != 0:
-		// Derive task ID from filename (UUID).
-		base := filepath.Base(event.Name)
-		id := strings.TrimSuffix(base, ".yaml")
-		w.removeTask(id)
+		if appID == "" {
+			slog.Warn("task watcher: remove event for unregistered dir, skipping", "file", event.Name)
+			return
+		}
+		base := strings.TrimSuffix(filepath.Base(event.Name), ".yaml")
+		w.removeTask(appID + "/" + base)
 
 	case event.Op&fsnotify.Rename != 0:
-		base := filepath.Base(event.Name)
-		id := strings.TrimSuffix(base, ".yaml")
-		w.removeTask(id)
+		if appID == "" {
+			slog.Warn("task watcher: rename event for unregistered dir, skipping", "file", event.Name)
+			return
+		}
+		base := strings.TrimSuffix(filepath.Base(event.Name), ".yaml")
+		w.removeTask(appID + "/" + base)
 	}
 }
 

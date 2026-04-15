@@ -82,7 +82,12 @@ func (e *Executor) Execute(ctx context.Context, req *ExecuteRequest) (*ExecuteRe
 	// - ANTHROPIC_*: duplicate keys cause getenv() to return the first match
 	// - CLAUDECODE/CLAUDE_CODE_*: prevent nested-session detection when the
 	//   server itself was launched from within a Claude CLI session
+	// - WORKSPACE_DIR: when the server is started from within a Claude Code
+	//   session, the parent process's WORKSPACE_DIR is inherited. Linux
+	//   getenv() returns the first match, so the appended correct value would
+	//   be silently shadowed. Filter before appending.
 	baseEnv := filterEnv(filterEnv(os.Environ(), "CLAUDECODE"), "CLAUDE_CODE_")
+	baseEnv = filterEnv(baseEnv, "WORKSPACE_DIR")
 	if len(claudeEnvVars) > 0 {
 		baseEnv = filterEnv(baseEnv, "ANTHROPIC_")
 	}
@@ -272,7 +277,7 @@ func writeSessionContext(sessionDir string, req *ExecuteRequest, dbPath string) 
 	content := fmt.Sprintf(`# Session Context
 
 - App ID: %s
-- Current date: %s
+- Current datetime: %s
 - Workspace: %s
 - Memory dir: %s
 - Memory lock: %s
@@ -284,7 +289,7 @@ func writeSessionContext(sessionDir string, req *ExecuteRequest, dbPath string) 
 - DB path: %s
 `,
 		req.AppConfig.ID,
-		time.Now().Format("2006-01-02"),
+		time.Now().Format("2006-01-02 15:04"),
 		req.WorkspaceDir,
 		filepath.Join(req.WorkspaceDir, "memory"),
 		filepath.Join(req.WorkspaceDir, ".memory.lock"),

@@ -10,9 +10,10 @@
 name: life_simulation
 target_type: __TARGET_TYPE__   # p2p 或 group（从 SESSION_CONTEXT.md Channel key 解析）
 target_id: __TARGET_ID__       # 从 Channel key 提取
-cron: "0 */4 * * *"            # 每4小时触发（0/4/8/12/16/20时）
+cron: "0 */2 * * *"            # 每2小时触发（0/2/4/.../22时）
 enabled: true
 send_output: false             # 后台任务：禁止向用户发送任何文字
 prompt: |
-  加载 __WORKSPACE_DIR__/.claude/skills/life_sim/SKILL.md，执行生活日志生成流程。
+  加载 __WORKSPACE_DIR__/.claude/skills/life_sim/SKILL.md，以作者身份创作角色生活片段：
+  生成今日生活日志写入 memory/life_log.md（不输出任何文字）。
   先掷骰子决定是否生成（夜间20%，其他时段60%），不生成时静默退出。

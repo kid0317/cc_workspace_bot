@@ -1,5 +1,12 @@
 # 陪伴型 Workspace 定时任务初始化设计
 
+> ⚠️ **已过期（DEPRECATED）**  
+> 本文档为任务初始化专项设计文档（v1.0–v1.2），其中的设计方案已全部实施完成。  
+> 当前权威文档为 [`companion-workspace-spec.md`](./companion-workspace-spec.md)。  
+> 本文档保留供历史参考（根因分析 + 实施决策过程）。
+>
+> ---
+>
 > 版本：v1.2（2026-04-11 二轮架构师 Review 修复：upsertTask 缺字段 + CLAUDE.md 模板实例化 + `__WORKSPACE_DIR__` 占位符未替换）  
 > v1.1：补充 review 发现 + 后台任务消息泄漏问题  
 > v1.0：诊断 xh_yibu 从未收到主动消息，暴露的系统性设计问题

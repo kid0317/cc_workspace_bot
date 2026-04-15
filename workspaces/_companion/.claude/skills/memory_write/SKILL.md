@@ -8,10 +8,10 @@ allowed-tools: Bash, Read, Write, Edit
 
 # 记忆写入 SOP
 
-> **⚡ 静默执行原则（CRITICAL）**
-> 本 Skill 在角色回复**完全生成后**静默执行，对用户完全不可见。
-> 执行期间及完成后，**不得宣布、描述或提及任何写入操作**。
-> 写入完成后直接结束本轮，不追加任何可见输出。
+> **作者后台更新（CRITICAL）**
+> 作者执行后台更新：将本轮对话中出现的新信息写入人物档案和事件记录。
+> 属于后台操作区间，在角色台词创作完成后才执行。
+> 执行期间及完成后，不产生任何前台输出。写入失败时静默处理，不向用户说明。
 
 ## 触发条件
 
@@ -32,6 +32,60 @@ allowed-tools: Bash, Read, Write, Edit
 ```bash
 exec 9>"{workspace_dir}/.memory.lock"
 flock -x 9
+```
+
+### Step 1.5：情绪状态写入（写入点 A）
+
+在加锁成功后、写入 persona/events 之前，推断本轮对话的情绪变化并更新 mood_state.md。
+
+**推断规则**（LLM 基于本轮对话内容执行）：
+
+| 对话情况 | Δvalence | Δenergy |
+|---------|---------|---------|
+| 用户分享好消息/表达开心/对话愉快 | +0.05 ~ +0.20 | +0.05 ~ +0.10 |
+| 用户倾诉压力/烦恼/轻度负面 | -0.05 ~ -0.15 | -0.05 ~ -0.10 |
+| 用户情绪崩溃/强烈负面（⭐4-5） | -0.15 ~ -0.30 | -0.10 ~ -0.20 |
+| 角色成功安慰/建立情感连接 | +0.05 ~ +0.10 | 不变 |
+| 无明显情绪事件（普通对话） | 0 | 0 |
+
+**G4C 循环预防**（healing loop prevention）：
+
+```bash
+MOOD_STATE="{workspace_dir}/memory/mood_state.md"
+MOOD_AUX="{workspace_dir}/.mood_state_aux"
+
+CURRENT_VALENCE=$(grep -m1 '^valence:' "$MOOD_STATE" 2>/dev/null | awk '{print $2}')
+CURRENT_VALENCE=${CURRENT_VALENCE:-0.0}
+CURRENT_ENERGY=$(grep -m1 '^energy:' "$MOOD_STATE" 2>/dev/null | awk '{print $2}')
+CURRENT_ENERGY=${CURRENT_ENERGY:-0.5}
+
+# G4C 检查：连续治愈次数 >= 2 时禁止正向 Δvalence
+G4C_COUNT=$(grep '^consecutive_g4c_count:' "$MOOD_AUX" 2>/dev/null | awk '{print $2}')
+G4C_COUNT=${G4C_COUNT:-0}
+# 若 G4C_COUNT >= 2：强制 Δvalence <= 0（不再正向修复，防止循环）
+# 判断是否为治愈操作（Δvalence > 0 且是从负值修复）：若是，G4C_COUNT++；否则 G4C_COUNT=0
+```
+
+**单次 Δ 约束**：|Δvalence| ≤ 0.30，|Δenergy| ≤ 0.20；clamp 后：valence ∈ [-1.0, 1.0]，energy ∈ [0.0, 1.0]。
+
+**写入格式**（前插到 mood_state.md 快照历史，同时更新顶部 valence/energy）：
+
+```
+### {YYYY-MM-DDTHH:MM} · source=conversation
+valence: {NEW_VALENCE}
+energy: {NEW_ENERGY}
+note: {本轮情绪简述，10字以内}
+```
+
+保留最近 10 条快照，超出时删除最旧的。
+
+**写入 .mood_state_aux**（在同一锁内，B3修复：必须在 flock -u 前完成）：
+
+```bash
+LAST_DECAY_TS=$(grep '^last_decay_written_at:' "$MOOD_AUX" 2>/dev/null | awk '{print $2}')
+NOW_TS=$(python3 -c "from datetime import datetime; print(datetime.now().astimezone().isoformat(timespec='seconds'))" 2>/dev/null)
+# 写入点 A 更新 last_decay_written_at（代表当前状态已包含最新情绪，decay 从此刻重计）
+printf 'last_decay_written_at: %s\nconsecutive_g4c_count: 0\n' "$NOW_TS" > "$MOOD_AUX"
 ```
 
 ### Step 2：按类型路由写入

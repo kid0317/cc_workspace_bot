@@ -1,0 +1,15 @@
+# 知识成长定时任务模板
+# 每日凌晨3点触发，处理 material_pool.md 中的知识类素材。
+# 推进三阶段状态机：raw → digesting → formed。
+# send_output: false 表示此任务产出不发送给用户（后台静默执行）。
+
+name: knowledge_growth
+target_type: __TARGET_TYPE__   # p2p 或 group（从 SESSION_CONTEXT.md Channel key 解析）
+target_id: __TARGET_ID__       # 从 Channel key 提取
+cron: "0 3 * * *"              # 每日凌晨3点触发
+enabled: true
+send_output: false             # 后台任务：禁止向用户发送任何文字
+prompt: |
+  加载 __WORKSPACE_DIR__/.claude/skills/knowledge_growth/SKILL.md，执行知识成长：
+  处理 material_pool.md 中的知识素材，推进三阶段状态机（raw→digesting→formed）。
+  WORKSPACE_DIR=__WORKSPACE_DIR__

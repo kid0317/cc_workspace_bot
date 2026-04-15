@@ -1,0 +1,23 @@
+# 自动生成，勿手动修改
+# 由 calibrate_params/recalculate.sh 基于 persona.md 的 personality_dims 计算
+generated_at: "2026-04-14T23:40:32+08:00"
+persona_checksum: "2e596d5d"
+
+response_mode_weights:
+  LISTEN: 32
+  SHARE: 23
+  OBSERVE: 24
+  SILENCE: 21
+
+proactive:
+  base_prob: 22
+  max_skip: 8
+
+conversation:
+  question_interval: 3
+  max_questions_per_session: 8
+
+life_sim:
+  gen_threshold_day: 40
+  gen_threshold_night: 16
+  log_max_length: 220

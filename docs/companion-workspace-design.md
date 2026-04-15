@@ -1,6 +1,12 @@
 # Companion Workspace 设计文档
 
-> 状态：设计稿（待讨论确认）
+> ⚠️ **已过期（DEPRECATED）**  
+> 本文档为 2026-04-09 的初始设计草稿，已被 [`companion-workspace-spec.md`](./companion-workspace-spec.md) 取代。  
+> 请勿基于本文档做开发决策，仅供历史参考。
+>
+> ---
+>
+> 状态：~~设计稿（待讨论确认）~~ → **已过期**
 > 创建日期：2026-04-09
 > 参考调研：[Reddit 调研报告](https://www.feishu.cn/docx/ThQFdyWl0ot1W2x14WjchOTgnPh)（情感陪伴/角色扮演 AI 应用设计）
 

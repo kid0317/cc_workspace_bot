@@ -117,9 +117,9 @@ send_output: true
 		t.Fatalf("LoadYAML() error = %v", err)
 	}
 
-	// ID is derived from filename, not from the YAML id field.
-	if task.ID != "task1" {
-		t.Errorf("ID = %q, want %q (derived from filename)", task.ID, "task1")
+	// ID is "{app_id}/{filename_slug}", computed by the framework.
+	if task.ID != "injected-app/task1" {
+		t.Errorf("ID = %q, want %q", task.ID, "injected-app/task1")
 	}
 	// AppID is injected by caller, not from YAML.
 	if task.AppID != "injected-app" {
@@ -139,26 +139,41 @@ send_output: true
 	}
 }
 
-// TestLoadYAML_IDDerivedFromFilename verifies that the task ID is always the
-// filename stem, regardless of what the YAML id field contains.
-func TestLoadYAML_IDDerivedFromFilename(t *testing.T) {
-	dir := t.TempDir()
-	path := writeYAML(t, dir, "task2.yaml", `
-name: "No ID task"
+// TestLoadYAML_IDNamespaced verifies that the task ID is always "{app_id}/{slug}",
+// regardless of what the YAML id field contains, ensuring global uniqueness.
+func TestLoadYAML_IDNamespaced(t *testing.T) {
+	tests := []struct {
+		filename string
+		appID    string
+		wantID   string
+	}{
+		// Semantic name: companion template task
+		{"proactive_reach.yaml", "xh_yibu", "xh_yibu/proactive_reach"},
+		// UUID filename: Claude-generated task
+		{"1ff20d20-4469-4346-8e96-3dda5d71c123.yaml", "investment", "investment/1ff20d20-4469-4346-8e96-3dda5d71c123"},
+		// Slug with hyphens
+		{"morning-todo-8am.yaml", "ycm_life", "ycm_life/morning-todo-8am"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantID, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeYAML(t, dir, tt.filename, `
+name: "Test task"
 cron: "* * * * *"
 target_type: "group"
 target_id: "oc_chat1"
 prompt: "Hello"
 enabled: true
 `)
-
-	task, err := LoadYAML(path, "app1")
-	if err != nil {
-		t.Fatalf("LoadYAML() error = %v", err)
-	}
-
-	if task.ID != "task2" {
-		t.Errorf("ID = %q, want %q (derived from filename)", task.ID, "task2")
+			task, err := LoadYAML(path, tt.appID)
+			if err != nil {
+				t.Fatalf("LoadYAML() error = %v", err)
+			}
+			if task.ID != tt.wantID {
+				t.Errorf("ID = %q, want %q", task.ID, tt.wantID)
+			}
+		})
 	}
 }
 

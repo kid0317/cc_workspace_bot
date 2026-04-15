@@ -252,11 +252,11 @@ NEW_APP_BLOCK="  - id: \"${APP_ID}\"
     feishu_verification_token: \"\"
     feishu_encrypt_key: \"\"
     workspace_dir: \"${WORKSPACE_DIR}\"
+    workspace_mode: \"companion\"
     allowed_chats: []
     claude:
       permission_mode: \"acceptEdits\"
-      model: \"sonnet\"              # companion 使用 sonnet 维持角色一致性
-      companion: true               # 标识为陪伴型 workspace
+      model: \"sonnet\"
       allowed_tools:
         - \"Bash\"
         - \"Read\"
