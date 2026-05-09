@@ -1,6 +1,7 @@
 # ── Secrets & Config ──────────────────────────────────────────────────────────
 config.yaml
 config.yaml.bak*
+config.bailian.yaml
 **/feishu_ops/feishu.json
 
 # ── Compiled Binaries ─────────────────────────────────────────────────────────
