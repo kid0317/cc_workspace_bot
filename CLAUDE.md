@@ -69,31 +69,45 @@ cc-workspace-bot/
 │   ├── db/
 │   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
 │   ├── claude/
-│   │   └── executor.go         # 子进程调用 claude CLI，stream-json 解析
+│   │   ├── executor.go         # 子进程调用 claude CLI，stream-json 解析
+│   │   ├── sanitize.go         # JSONL 清理（第三方 provider 污染恢复）
+│   │   └── executor_test.go
 │   ├── feishu/
 │   │   ├── receiver.go         # WS 事件解析、附件下载、欢迎事件处理、Dispatcher 接口
 │   │   └── sender.go           # 发送卡片（SendCard/SendThinking/UpdateCard/SendText）
 │   ├── session/
 │   │   ├── manager.go          # channel_key → Worker 懒启动映射（sync.Map + WaitGroup）
-│   │   └── worker.go           # 单 channel 串行队列、/new 命令、空闲超时归档
+│   │   ├── worker.go           # 单 channel 串行队列、/new 命令、空闲超时归档
+│   │   └── segment.go          # 长消息分段（避免飞书 4KB 限制）
 │   ├── task/
 │   │   ├── watcher.go          # fsnotify 监听 tasks/ 目录变更
 │   │   ├── scheduler.go        # gocron/v2 调度器管理
-│   │   └── runner.go           # 定时任务执行（YAML 加载 + claude 调用）
+│   │   ├── runner.go           # 定时任务执行（YAML 加载 + claude 调用）
+│   │   ├── cleanup.go          # 附件清理
+│   │   └── migration.go        # Task ID 迁移（旧格式兼容）
 │   └── workspace/
 │       └── init.go             # workspace 目录初始化 + 模板复制（跳过 symlink）
 ├── workspaces/
-│   └── _template/              # 新 workspace 默认模板
-│       ├── CLAUDE.md           # workspace 级 AI 指令
+│   ├── _template/              # 任务型 workspace 默认模板
+│   │   ├── CLAUDE.md           # workspace 级 AI 指令
+│   │   └── .claude/
+│   │       └── skills/
+│   │           ├── feishu_ops/     # 飞书操作（SKILL.md + scripts/）
+│   │           ├── memory/         # 长记忆读写规范（SKILL.md）
+│   │           ├── task/           # 定时任务规范（SKILL.md）
+│   │           ├── cases/          # 事件记录（SKILL.md）
+│   │           ├── todo/           # 待办管理（SKILL.md）
+│   │           ├── insights/       # 感悟记录（SKILL.md）
+│   │           └── chat_history/   # 历史对话检索（SKILL.md + 脚本）
+│   └── _companion/             # 陪伴型 workspace 模板（独立）
+│       ├── CLAUDE.md           # 作者框架 + 记忆规则 + 不得出戏约束
+│       ├── memory/             # persona.md / user_profile.md / events.md
 │       └── .claude/
-│           └── skills/
-│               ├── feishu_ops/     # 飞书操作（SKILL.md + scripts/）
-│               ├── memory/         # 长记忆读写规范（SKILL.md）
-│               ├── task/           # 定时任务规范（SKILL.md）
-│               ├── cases/          # 事件记录（SKILL.md）
-│               ├── todo/           # 待办管理（SKILL.md）
-│               ├── insights/       # 感悟记录（SKILL.md）
-│               └── chat_history/   # 历史对话检索（SKILL.md + 脚本）
+│           ├── skills/
+│           │   ├── memory_write/   # 记忆写入 skill
+│           │   ├── proactive/      # 主动唤醒 skill
+│           │   └── feishu_ops/     # 飞书操作
+│           └── task_templates/     # 定时任务模板（占位符）
 ├── config.yaml                 # 应用配置示例
 ├── go.mod / go.sum
 └── bot.db                      # SQLite 数据库（运行时生成）
@@ -131,6 +145,10 @@ cc-workspace-bot/
 | 任务创建 | claude 写 `tasks/<uuid>.yaml`，fsnotify 自动注册 |
 | 内存共享写 | workspace `memory/` 目录用 flock 加锁（skill 层实现）|
 | 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker 完成后再退出 |
+| 多 Provider 支持 | 环境变量注入 `--settings`，不修改 CLI 默认认证 |
+| Resume 恢复容错 | `sanitize.go` 自动清理第三方 provider 污染，重试一次 |
+| 长消息分段 | `segment.go` 按语义边界分割，避免飞书 4KB 限制 |
+| Task ID 唯一性 | 复合 ID `{app_id}/{filename}`，避免 UUID 冲突 |
 
 ## Development Workflow
 
@@ -170,16 +188,18 @@ apps:
     feishu_verification_token: "xxx"
     feishu_encrypt_key: ""          # 可选
     workspace_dir: "./workspaces/product-assistant"
+    workspace_mode: "work"          # work（卡片）或 companion（纯文本）
     allowed_chats: []               # 空 = 不限制
     claude:
       permission_mode: "acceptEdits"
+      # provider: "bailian"        # 覆盖默认供应商（可选）
+      # model: "qwen-plus"         # 覆盖该供应商的默认模型（可选）
+      # effort: "high"             # Anthropic only: low/medium/high/xhigh/max
       allowed_tools:
         - "Bash"
         - "Read"
         - "Edit"
         - "Write"
-      # provider: "bailian"        # 覆盖默认供应商（可选）
-      # model: "qwen-plus"         # 覆盖该供应商的默认模型（可选）
 
 server:
   port: 8080
@@ -220,6 +240,7 @@ claude \
   --allowedTools "Bash Read Edit Write" \
   --max-turns 20 \
   --model <expanded_model>           # 来自 resolveProvider()
+  --effort <level>                   # 可选：来自 resolveEffort()，仅 anthropic 供应商注入
   --settings '{"env":{...}}'         # 覆盖 ~/.claude/settings.json（非默认 provider 时）
   --resume <claude_session_id>       # 省略 = 新 context
 ```
@@ -230,7 +251,7 @@ claude \
 2. **CLI `--settings` 层**：`buildSettingsJSON()` 生成 `{"env":{"ANTHROPIC_BASE_URL":"...","ANTHROPIC_AUTH_TOKEN":"...","ANTHROPIC_MODEL":"..."}}` 传给 `--settings` 参数，优先级高于 `~/.claude/settings.json`
 3. **CLI `--model` 层**：直接通过 `--model` 参数指定，最高优先级
 
-环境变量（由 `buildClaudeEnvVars()` 构造）：
+**环境变量（由 `buildClaudeEnvVars()` 构造）**：
 
 ```
 ANTHROPIC_BASE_URL=<mapped from provider or base_url>   # 百炼等第三方供应商
@@ -239,9 +260,17 @@ ANTHROPIC_MODEL=<from model>                             # 模型名称
 ANTHROPIC_DEFAULT_HAIKU_MODEL=<from model>
 ANTHROPIC_DEFAULT_SONNET_MODEL=<from model>
 ANTHROPIC_DEFAULT_OPUS_MODEL=<from model>
+CC_LF_APP_ID=<app_id>                                    # Langfuse 追踪用
+CC_LF_CHANNEL_KEY=<channel_key>
+CC_LF_USER_OPEN_ID=<sender_id>
+CC_LF_FRAMEWORK_SESSION_ID=<session_id>
+CC_LF_TASK_NAME=<task_name>                             # 定时任务名称（可选）
+CC_LF_META_VERSION=1
 ```
 
 对于默认 anthropic provider 且无自定义配置时，不注入任何 env / --settings，让 claude CLI 使用自身认证。
+
+**`--effort` 参数**：仅 Anthropic 供应商生效，控制推理深度（low/medium/high/xhigh/max）
 
 ### session.Worker
 
@@ -251,6 +280,16 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=<from model>
 - `/new` 命令：归档当前 session，创建新 session 目录
 - **附件缓存**：纯附件消息（无文字）自动缓存，提示用户描述意图；下条文字消息合并附件引用后一起发给 claude
 - **空结果守护**：claude 返回空文本时（如 context 过长），提示用户 `/new` 开新会话
+- **长消息分段**：响应超过 4KB 时自动分段 PATCH 卡片，保持交互流畅
+
+### Resume 恢复容错
+
+使用百炼桥接后切换回 Anthropic 时，resume JSONL 可能被第三方 provider 污染（thinking 块空 signature、tool_use ID 含非法字符），导致 Anthropic API 返回 400。
+
+框架自动处理：
+1. 检测可恢复的错误特征
+2. 调用 `sanitize.go` 清理 JSONL 中的污染行
+3. 重试一次（仅一次，避免无限循环）
 
 ### 附件处理
 

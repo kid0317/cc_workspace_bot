@@ -60,13 +60,16 @@
 |------|------|
 | **多应用隔离** | 每个飞书应用对应独立 workspace，session 级目录隔离并发写操作 |
 | **智能会话管理** | 单聊 / 群聊 / 话题群，自动维护 Claude context，`/new` 开启新会话 |
+| **双模式回复** | `work` 模式（卡片交互，适合任务场景）/ `companion` 模式（纯文本对话，适合陪伴场景）|
 | **欢迎引导** | Bot 入群、用户加入群组、首次打开单聊时自动发送欢迎卡片介绍助手能力 |
 | **长期记忆** | 跨 session 共享记忆，filelock 工具保障跨平台并发安全 |
 | **定时任务** | 对话式创建 cron 任务，fsnotify 自动注册，YAML 为 source of truth |
+| **多模型支持** | Anthropic 原生 + 百炼桥接（Kimi/Qwen 等），支持 per-app 模型选择 |
 | **附件支持** | 图片、文件自动下载至 session 目录；纯附件消息智能缓存，等待用户描述意图后合并发送 |
 | **飞书全集成** | 发消息、读写文档/表格/多维表格、管理日历、查询群成员（18 个 Python 脚本）|
 | **事件记录** | 结构化记录具体事件（cases），支持按时间检索历史案例 |
 | **WS 长连接** | 无需公网 IP，企业内网直接部署 |
+| **成本观测** | Langfuse 集成，支持 token 用量追踪和成本分析（设计阶段）|
 
 ---
 
@@ -694,11 +697,13 @@ apps:
     feishu_verification_token: "xxx"    # 飞书事件订阅 Verification Token
     feishu_encrypt_key: ""              # 消息加密密钥（可选，不加密则留空）
     workspace_dir: "/data/workspaces/investment-assistant"
+    workspace_mode: "work"              # work（卡片交互）或 companion（纯文本对话）
     allowed_chats: []                   # 白名单 chat_id 列表，空表示不限制
     claude:
       permission_mode: "acceptEdits"    # acceptEdits（推荐）或 bypassPermissions
       provider: "bailian"              # 覆盖默认供应商（可选），对应 providers 中的 key
       model: "kimi-k2.5"              # 覆盖该供应商的默认模型（可选）
+      effort: "high"                     # 仅 Anthropic 生效，可选 low/medium/high/xhigh/max
       allowed_tools:                    # 允许 Claude 使用的工具，空表示不限制
         - "Bash"
         - "Read"
@@ -754,6 +759,8 @@ cleanup:
 - **`providers`**：供应商定义 map。每个 key 是供应商名，值包含 `base_url`、`auth_token`、`model`。Anthropic 不需要 base_url 和 auth_token（使用 claude CLI 自身认证）
 - **`apps[].claude.provider`**：可选，覆盖 `default_provider`，选择该 app 使用的供应商
 - **`apps[].claude.model`**：可选，覆盖所选供应商的默认模型
+- **`apps[].claude.effort`**：可选，仅 Anthropic 供应商生效，设置推理深度（low/medium/high/xhigh/max）
+- **`apps[].workspace_mode`**：`work`（默认）使用交互式卡片；`companion` 使用纯文本直接回复，更适合陪伴场景
 - **`permission_mode`**：`acceptEdits` 自动接受文件编辑操作（推荐生产环境）；`bypassPermissions` 跳过所有权限确认（高风险，仅测试用）
 - **`allowed_tools`**：限制 Claude 可用的工具，建议按最小权限原则配置
 - **`allowed_chats`**：留空则该应用接受所有来源的消息；填写后只处理白名单内的 chat_id
@@ -767,6 +774,7 @@ cleanup:
 |----------|--------------|------|
 | `sonnet` | `claude-sonnet-4-6` | 最佳编码模型（推荐） |
 | `opus` | `claude-opus-4-6` | 最深推理能力 |
+| `opus-4-7` | `claude-opus-4-7` | 最新 Opus，深度推理（成本追踪待定价注册）|
 | `haiku` | `claude-haiku-4-5-20251001` | 轻量快速，成本最低 |
 
 #### 百炼（阿里云 DashScope）
@@ -803,43 +811,43 @@ cc-workspace-bot/
 │   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
 │   ├── claude/
 │   │   ├── executor.go         # 子进程调用 claude CLI、SESSION_CONTEXT.md 注入、stream-json 解析
+│   │   ├── sanitize.go         # JSONL 清理（第三方 provider 污染恢复）
 │   │   └── executor_test.go
 │   ├── feishu/
 │   │   ├── receiver.go         # WS 事件解析、附件下载、Dispatcher 接口
 │   │   └── sender.go           # SendThinking / UpdateCard / SendText
 │   ├── session/
 │   │   ├── manager.go          # channel_key → Worker 懒启动（sync.Map + WaitGroup）
-│   │   └── worker.go           # 串行队列、/new、空闲超时归档、moveAttachments
+│   │   ├── worker.go           # 串行队列、/new、空闲超时归档、moveAttachments
+│   │   └── segment.go          # 长消息分段发送（避免飞书 4KB 限制）
 │   ├── task/
 │   │   ├── watcher.go          # fsnotify 监听 tasks/ 目录变更
 │   │   ├── scheduler.go        # gocron/v2 调度器管理
 │   │   ├── runner.go           # 任务执行（YAML 加载 + cron 校验 + claude 调用）
-│   │   └── cleanup.go          # 附件清理（archived + retention_days / max_days）
+│   │   ├── cleanup.go          # 附件清理（archived + retention_days / max_days）
+│   │   └── migration.go        # Task ID 迁移（旧格式兼容）
 │   └── workspace/
 │       └── init.go             # workspace 目录初始化 + feishu.json 写入 + 模板复制
 ├── workspaces/
-│   └── _template/              # 新 workspace 默认模板
-│       ├── CLAUDE.md           # AI 指令（含初始化引导、技能索引、安全边界）
-│       ├── .claude/
-│       │   └── settings.local.json  # 最小权限白名单（flock / feishu_ops 脚本 / 基础命令）
-│       ├── memory/
-│       │   ├── MEMORY.md       # 主索引 + 初始化进度清单
-│       │   └── user_profile.md # 用户档案模板
-│       └── .claude/
-│           └── skills/
-│               ├── feishu_ops/     # 飞书集成（SKILL.md + 18 个 Python 脚本）
-│               ├── memory/         # 长记忆读写规范（含 flock 操作指南）
-│               ├── task/           # 定时任务 YAML 格式规范
-│               ├── cases/          # 事件记录规范（cases/ 目录管理）
-│               ├── todo/           # 待办管理与日志
-│               ├── insights/       # 感悟记录
-│               └── chat_history/   # 历史对话检索
+│   ├── _template/              # 新 workspace 默认模板（任务型）
+│   │   ├── CLAUDE.md           # AI 指令（含初始化引导、技能索引、安全边界）
+│   │   ├── .claude/
+│   │   │   └── settings.local.json  # 最小权限白名单
+│   │   └── .claude/skills/     # 8 个技能目录
+│   └── _companion/             # 陪伴型 workspace 模板
+│       ├── CLAUDE.md           # 作者框架 + 记忆规则 + 不得出戏约束
+│       ├── memory/             # persona.md / user_profile.md / events.md
+│       ├── tasks/              # 主动唤醒定时任务模板
+│       └── .claude/skills/     # 陪伴型专用技能
 ├── docs/
 │   ├── design.md               # 架构设计、时序图、设计决策
+│   ├── companion-workspace-spec.md  # 陪伴型 workspace 规范
+│   ├── langfuse-cost-tracking-design.md  # 成本追踪设计
 │   ├── requirements.md         # 功能需求
 │   └── tech-research.md        # 技术调研
 ├── config.yaml.template        # 配置模板（复制为 config.yaml 使用）
-├── init_workspace.sh           # Workspace 一键初始化脚本
+├── init_workspace.sh           # Workspace 一键初始化脚本（任务型）
+├── init_companion_workspace.sh # 陪伴型 workspace 初始化脚本
 ├── start.sh                    # 服务启停脚本
 ├── go.mod / go.sum
 └── bot.db                      # SQLite 数据库（运行时生成）
@@ -892,6 +900,7 @@ workspaces/<app-id>/
 | 文件锁 | gofrs/flock | 跨平台文件锁（替代 Unix flock 命令）|
 | AI 引擎 | Claude CLI (claude) | 子进程调用，stream-json 输出 |
 | 飞书操作 | Python + requests | 18 个独立脚本，凭证文件读取 |
+| 成本追踪 | Langfuse（设计）| Token 用量与成本观测（设计阶段）|
 
 ---
 
@@ -946,6 +955,9 @@ go mod tidy
 | 附件处理 | TempDir → moveAttachments → session/attachments/ | 先入队再移动，减少路由器阻塞 |
 | 任务恢复 | 启动时从 DB 查询（非扫描文件系统）| watcher 保证 YAML→DB 同步，DB 记录运行时状态 |
 | 优雅关闭 | `sessionMgr.Wait()` | 等待所有 worker goroutine 完成当前任务后退出 |
+| 多 Provider 支持 | 环境变量注入 `--settings` | 兼容 Anthropic + 百炼桥接，不修改 CLI 默认认证 |
+| Resume 恢复容错 | Sanitize JSONL（`sanitize.go`）| 第三方 provider 污染导致 Anthropic 400 时自动清理重试 |
+| 长消息发送 | Segment 分段（`segment.go`）| 飞书卡片 4KB 限制，超长响应自动分片发送 |
 
 更多设计细节见 [设计文档](docs/design.md)。
 
@@ -956,6 +968,8 @@ go mod tidy
 | 文档 | 说明 |
 |------|------|
 | [设计文档](docs/design.md) | 完整架构设计、时序图、数据模型、设计决策 |
+| [陪伴型 Workspace 规范](docs/companion-workspace-spec.md) | 陪伴型机器人设计规范（作者框架、记忆系统、主动唤醒）|
+| [Langfuse 成本追踪设计](docs/langfuse-cost-tracking-design.md) | Token 用量采集与成本统计设计 |
 | [需求文档](docs/requirements.md) | 功能需求和模块说明 |
 | [技术调研](docs/tech-research.md) | 技术选型背景和实现细节 |
 
