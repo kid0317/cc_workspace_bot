@@ -1,25 +1,28 @@
 ---
 name: life_sim
 description: |
-  Companion Workspace 生活日志生成 SOP。
-  由 life_sim.yaml 定时任务触发（每4小时一次）。
-  模拟角色的日常生活片段，写入 memory/life_log.md。
+  Companion Workspace 生活日志生成 SOP (v5.2)。
+  由 life_sim.yaml 定时任务触发（每 4 小时）。
+  从 material_pool 选真实素材，以"触发→反应"模板转译为角色生活日志。
+  内含：留白模式、用户倾诉强制呼应、降温规则、多形态衔接、失败降级链。
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-# 生活日志生成执行流程
+# 生活日志生成执行流程 v5.2
 
 > **CRITICAL：禁止输出任何文字。**
-> 本 Skill 由定时任务触发（send_output=false 模式），Claude 的任何回复文字都会被系统直接丢弃。
-> 作者创作角色生活片段：基于角色性格、当前时间和心情状态，为角色虚构一段生活日志，丰富角色的真实感和内在世界。
-> 全流程完成后直接退出，写入 memory/life_log.md，不产生用户可见输出。
+> 本 Skill 由定时任务触发（send_output=false 模式），Claude 的任何回复文字会被系统丢弃。
+> 作者从真实世界素材池挑选，以角色声音转译为生活切片；全流程完成后直接退出。
 
-## 设计原则
+## 设计原则（v5.2）
 
-- **真实性优先**：专有名词（电影/游戏/书籍）必须验证真实存在，不杜撰
-- **时间合理性**：生成内容必须符合当前时间段（凌晨不看电影）
-- **情绪连续性**：新日志的情绪基调参考上一条 life_log + 最近对话
-- **克制生成**：先掷骰子决定是否生成，不每次都写
+- **真实素材优先**：默认从 `material_pool.md` 挑选素材，仅在池子空/陈旧时降级虚构
+- **用户倾诉优先于世界**：用户亲口告知的 user_told 挂念拥有强制呼应通道
+- **"触发→反应"两段式**：原帖复述 ≤1 行，其余留给角色感官/动作/口癖
+- **留白模式 25%**：保留 v3 "天花板很白" 式极简美学，对抗模板僵硬
+- **降温规则精细化**：persona 口癖豁免情绪峰值硬规则，stability 高的角色大事件保留 70% 峰值
+- **失败降级链**：pool 空 / fetch 失败均有明确 fallback 路径
+- **即时编造感知**：对话中 SHARE 姿态产生的 `src: inline_fabrication` 条目与 life_sim 条目共存于同一 life_log，挑选素材时需避免主题重复
 
 ---
 
@@ -34,35 +37,46 @@ PERSONA_FILE="$WORKSPACE_DIR/memory/persona.md"
 RECENT_HISTORY="$WORKSPACE_DIR/memory/RECENT_HISTORY.md"
 MEMORY_FILE="$WORKSPACE_DIR/memory/MEMORY.md"
 PARAMS_FILE="$WORKSPACE_DIR/character_params.yaml"
+MATERIAL_POOL="$WORKSPACE_DIR/memory/material_pool.md"
+MATERIAL_LOCK="$WORKSPACE_DIR/.material.lock"
+UNRESOLVED="$WORKSPACE_DIR/memory/unresolved.md"
+MOOD_STATE="$WORKSPACE_DIR/memory/mood_state.md"
+MOOD_AUX="$WORKSPACE_DIR/.mood_state_aux"
+FETCH_STATE="$WORKSPACE_DIR/.material_fetch_state.json"
+EVENTS_JSONL="$WORKSPACE_DIR/.life_sim_events.$(date +%Y%m%d).jsonl"
+FILTERS_FILE="$WORKSPACE_DIR/.claude/skills/material_fetch/filters.yaml"
+KEYWORD_TEMPLATES="$WORKSPACE_DIR/memory/keyword_templates.yaml"
 
-# 读取性格驱动参数（带降级默认值）
-GEN_THRESHOLD_DAY=$(awk '/^life_sim:/{f=1} f && /^  gen_threshold_day:/{print $2; exit}' \
-    "$PARAMS_FILE" 2>/dev/null)
-GEN_THRESHOLD_DAY=${GEN_THRESHOLD_DAY:-60}
+_p() { awk -v k="$1" '/^life_sim:/{f=1} f && $0 ~ "^  "k":"{gsub(/^[ \t]+/,"",$0); sub("^"k":[ \t]*",""); sub(/[ \t]*#.*$/,""); gsub(/[ \t]+$/,""); gsub(/^"/,""); gsub(/"$/,""); print; exit}' "$PARAMS_FILE" 2>/dev/null; }
 
-GEN_THRESHOLD_NIGHT=$(awk '/^life_sim:/{f=1} f && /^  gen_threshold_night:/{print $2; exit}' \
-    "$PARAMS_FILE" 2>/dev/null)
-GEN_THRESHOLD_NIGHT=${GEN_THRESHOLD_NIGHT:-20}
+GEN_THRESHOLD_DAY=$(_p gen_threshold_day);    GEN_THRESHOLD_DAY=${GEN_THRESHOLD_DAY:-60}
+GEN_THRESHOLD_NIGHT=$(_p gen_threshold_night); GEN_THRESHOLD_NIGHT=${GEN_THRESHOLD_NIGHT:-20}
+LOG_MAX_LENGTH=$(_p log_max_length);          LOG_MAX_LENGTH=${LOG_MAX_LENGTH:-300}
+EMOTIONAL_RANGE=$(_p emotional_range);        EMOTIONAL_RANGE=${EMOTIONAL_RANGE:-3}
+MATERIAL_USE_THRESHOLD=$(_p material_use_threshold); MATERIAL_USE_THRESHOLD=${MATERIAL_USE_THRESHOLD:-60}
+ORIGINAL_QUOTE_MAX_CHARS=$(_p original_quote_max_chars); ORIGINAL_QUOTE_MAX_CHARS=${ORIGINAL_QUOTE_MAX_CHARS:-15}
+WHITE_SPACE_PROB=$(_p white_space_prob);      WHITE_SPACE_PROB=${WHITE_SPACE_PROB:-25}
+USER_ECHO_PRIORITY=$(_p user_echo_priority);  USER_ECHO_PRIORITY=${USER_ECHO_PRIORITY:-1.5}
 
-LOG_MAX_LENGTH=$(awk '/^life_sim:/{f=1} f && /^  log_max_length:/{print $2; exit}' \
-    "$PARAMS_FILE" 2>/dev/null)
-LOG_MAX_LENGTH=${LOG_MAX_LENGTH:-300}
+INIT_STATUS=$(grep 'initialization_status:' "$MEMORY_FILE" 2>/dev/null | grep -oP '(pending|phase1_done|phase2_done|done)' | head -1)
+[[ "$INIT_STATUS" != "done" ]] && exit 0
 ```
 
-**前置条件检查（initialization_status）**：
+**事实流 append 辅助函数**（始终用 shell `>>`，单行 ≤4KB，保证多进程原子）：
 
 ```bash
-INIT_STATUS=$(grep 'initialization_status:' "$MEMORY_FILE" 2>/dev/null | grep -oP '(pending|phase1_done|phase2_done|done)' | head -1)
-if [[ "$INIT_STATUS" != "done" ]]; then
-    exit 0  # 初始化未完成，静默退出
-fi
+_emit_event() {
+    local payload="$1"   # 以 { 开头、} 结尾的 JSON 片段
+    local ts; ts=$(python3 -c "from datetime import datetime; print(datetime.now().astimezone().isoformat(timespec='seconds'))" 2>/dev/null)
+    local ws; ws=$(basename "$WORKSPACE_DIR")
+    # 在最外层 { 后插 v/ts/ws 三个固定字段
+    printf '{"v":1,"ts":"%s","ws":"%s",%s\n' "$ts" "$ws" "${payload:1}" >> "$EVENTS_JSONL"
+}
 ```
 
 ---
 
 ## Step 1：时间段检查
-
-读取 persona.md 或 user_profile.md 中的时区字段（默认 Asia/Shanghai）。
 
 ```bash
 PROFILE_FILE="$WORKSPACE_DIR/memory/user_profile.md"
@@ -71,285 +85,334 @@ TZ="${TZ_FIELD:-Asia/Shanghai}"
 LOCAL_HOUR=$(TZ="$TZ" date +%H)
 ```
 
-**凌晨约束**（LOCAL_HOUR 在 00-05 之间）：
-- 不生成涉及外出、电影、购物等活动
-- 仅允许生成：失眠/做梦/半夜想事情 等夜间活动
+---
+
+## Step 1.5：FORCE_ECHO 预检（v5.1 必在骰子之前）
+
+**设计文档 §7.2 承诺"用户倾诉必有呼应"，所以 user_echo 必须 bypass 骰子。**
+
+**LLM 判断任务**（在 Step 2 骰子之前执行）：
+1. 读 `RECENT_HISTORY.md` 最近 24h 的用户消息
+2. 读 `unresolved.md` 活跃块的 `src=user_told` 条目
+3. 判断是否有强烈情绪/约定事件在 24h 内新出现，且对应 user_told 条目的 `forced_echo_last` 早于 72h 前（或 `(never)`）
+
+```bash
+FORCE_ECHO=false        # LLM 设置
+TARGET_UNRESOLVED=""    # LLM 设置，如 "U003"
+```
+
+**若 FORCE_ECHO=true**：
+- **跳过 Step 2 骰子**（下一步 if 分支）
+- WHITESPACE_MODE=false（强制呼应不走留白）
+- FALLBACK_REASON="user_echo"
 
 ---
 
-## Step 2：生成概率掷骰
+## Step 2：掷骰（含留白模式分支；FORCE_ECHO 时 bypass）
 
 ```bash
-RAND=$((RANDOM % 100))
-# 阈值从 character_params.yaml 读取（verbosity 维度驱动，话少型角色生成频率更低）
-if [[ $LOCAL_HOUR -ge 0 ]] && [[ $LOCAL_HOUR -lt 6 ]]; then
-    THRESHOLD=$GEN_THRESHOLD_NIGHT   # 夜间：由 verbosity 决定，默认 20%
+if [[ "$FORCE_ECHO" == "true" ]]; then
+    # 用户倾诉强制呼应：跳过骰子，直接进入后续步骤
+    RAND=-1
+    THRESHOLD=100
+    WHITESPACE_MODE=false
+    _emit_event "{\"event\":\"dice_bypass\",\"reason\":\"user_echo\",\"target\":\"${TARGET_UNRESOLVED}\"}"
 else
-    THRESHOLD=$GEN_THRESHOLD_DAY     # 其他时段：由 verbosity 决定，默认 60%
-fi
+    RAND=$((RANDOM % 100))
+    if [[ $LOCAL_HOUR -ge 0 && $LOCAL_HOUR -lt 6 ]]; then
+        THRESHOLD=$GEN_THRESHOLD_NIGHT
+    else
+        THRESHOLD=$GEN_THRESHOLD_DAY
+    fi
+    if [[ $RAND -ge $THRESHOLD ]]; then
+        _emit_event "{\"event\":\"dice_skip\",\"dice\":$RAND,\"threshold\":$THRESHOLD}"
+        exit 0
+    fi
 
-if [[ $RAND -ge $THRESHOLD ]]; then
-    exit 0  # 本次不生成，静默退出
+    # 留白模式骰子
+    WS_RAND=$((RANDOM % 100))
+    WHITESPACE_MODE=false
+    # pool 陈旧时留白概率临时升高
+    if [[ ${POOL_AVAILABLE_COUNT:-0} -lt 3 && ${HOURS_SINCE_FETCH:-0} -gt 72 ]]; then
+        EFFECTIVE_WS_PROB=50
+    else
+        EFFECTIVE_WS_PROB=$WHITE_SPACE_PROB
+    fi
+    if [[ $WS_RAND -lt $EFFECTIVE_WS_PROB ]]; then
+        WHITESPACE_MODE=true
+    fi
 fi
 ```
 
 ---
 
-## Step 2.5：素材来源决策（G1-G6 检查）
+## Step 3：读情绪基线 + 懒惰衰减
 
-在骰子通过后、内容生成前，检查是否有 life_scene 类素材可用作生成灵感。
+读 persona.md 的 `stability` → 计算衰减系数 `k = 0.05 + (5 - stability) × 0.0375`
+读 mood_state.md 的 `valence / energy` 并按 `last_decay_written_at` 衰减。
+得 `DECAYED_VALENCE` 和 `CURRENT_ENERGY` 作为情绪基线。
+
+（实现代码保持 v3 相同，此处省略。）
+
+---
+
+## Step 4：用户呼应生成约束（仅当 FORCE_ECHO=true）
+
+若 Step 1.5 已设 `FORCE_ECHO=true`：
+- 本次生成**必须**围绕 `TARGET_UNRESOLVED` 展开
+- 跳过 Step 5 素材池挑选，直接进 Step 7（可能纯虚构）
+- FALLBACK_REASON="user_echo"
+- Step 8.2 会同步更新该条目的 `forced_echo_last`
+
+**节制**：呼应内容禁止复述用户原话，必须以**角色生活切片形式**出现
+（例如"今天下午给妈发了条微信，没回，估计在午睡"），避免变成"妈妈生病"每 4h 被提一次。
+
+---
+
+## Step 5：素材挑选（pool 优先，分三路径）
 
 ```bash
-MATERIAL_POOL="$WORKSPACE_DIR/memory/material_pool.md"
-MATERIAL_LOCK="$WORKSPACE_DIR/.material.lock"
-SELECTED_MATERIAL=""
-SELECTED_MAT_ID=""
-USE_MATERIAL_SEED=false
-
-if [[ -f "$MATERIAL_POOL" ]]; then
-    LIFE_SCENE_COUNT=$(python3 -c "
+POOL_AVAILABLE_COUNT=$(python3 -c "
 import re
 try:
     c = open('$MATERIAL_POOL').read()
-    entries = re.split(r'(?=## \[MAT)', c)
-    print(sum(1 for e in entries if 'available' in e and 'life_scene' in e))
+    print(sum(1 for e in re.split(r'(?=## \[MAT)', c) if 'available' in e))
 except: print(0)
 " 2>/dev/null)
-    LIFE_SCENE_COUNT=${LIFE_SCENE_COUNT:-0}
-fi
-```
+POOL_AVAILABLE_COUNT=${POOL_AVAILABLE_COUNT:-0}
 
-**G1-G6 检查清单**（LLM 执行）：
-
-| # | 检查项 | 否 → 降级 |
-|---|--------|---------|
-| G1 | material_pool.md 存在 available + life_scene 类素材 | 跳过素材，纯虚构生成 |
-| G2 | 素材情绪向量（valence）与当前时间段适配（凌晨不使用 valence > 0.4 的高兴素材） | 换一条或降级 |
-| G3 | 素材内容与 life_log.md 最近 3 条记录无重复（主题/专有名词） | 换一条或降级 |
-| G4 | 随机决策通过（有素材时使用概率 60%） | 降级为纯虚构 |
-| G5 | 素材文字量合理（不超过 LOG_MAX_LENGTH 的 50%） | 换一条或降级 |
-| G6 | 全部通过 → USE_MATERIAL_SEED=true，选定素材 ID 存入 SELECTED_MAT_ID | 降级 |
-
-若 G1-G6 全部通过：从 material_pool.md 随机选取 1 条 life_scene available 素材，
-以该素材的情感/场景描述作为本条日志的生成灵感（不直接复制，角色化创作）。
-
----
-
-## Step 3：读取情绪上下文 + 情绪状态（mood_state.md）
-
-1. 读取 `life_log.md` 最后一条 [LNNN] 条目，提取情绪状态
-2. 读取 `RECENT_HISTORY.md`（若存在），了解用户近期互动情绪
-3. 综合推断角色当前情绪基调（不必强行延续，可合理变化）
-
-**从 mood_state.md 读取当前情绪基线 + 懒惰衰减（B5修复）**：
-
-```bash
-MOOD_STATE="$WORKSPACE_DIR/memory/mood_state.md"
-MOOD_AUX="$WORKSPACE_DIR/.mood_state_aux"
-
-CURRENT_ENERGY=$(grep -m1 '^energy:' "$MOOD_STATE" 2>/dev/null | awk '{print $2}')
-CURRENT_ENERGY=${CURRENT_ENERGY:-0.5}
-CURRENT_VALENCE=$(grep -m1 '^valence:' "$MOOD_STATE" 2>/dev/null | awk '{print $2}')
-CURRENT_VALENCE=${CURRENT_VALENCE:-0.0}
-
-# 懒惰衰减：k = 0.05 + (5 - stability) × 0.0375（线性插值，覆盖1-5全档）
-LAST_DECAY_TS=$(grep '^last_decay_written_at:' "$MOOD_AUX" 2>/dev/null | awk '{print $2}')
-DECAYED_VALENCE=$(python3 -c "
-from datetime import datetime, timezone
-try:
-    stability = int('$STABILITY')
-    k = 0.05 + (5 - stability) * 0.0375
-    valence = float('$CURRENT_VALENCE')
-    last_ts = '$LAST_DECAY_TS'
-    if last_ts:
-        last = datetime.fromisoformat(last_ts)
-        now = datetime.now().astimezone()
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        hours = (now - last).total_seconds() / 3600
-        decayed = valence * (1 - k) ** hours
-    else:
-        decayed = valence
-    print(round(max(-1.0, min(1.0, decayed)), 3))
-except: print('$CURRENT_VALENCE')
+LAST_FETCH_TS=$(python3 -c "
+import json
+try: print(json.load(open('$FETCH_STATE')).get('last_success_ts',''))
+except: print('')
 " 2>/dev/null)
-DECAYED_VALENCE=${DECAYED_VALENCE:-$CURRENT_VALENCE}
+
+HOURS_SINCE_FETCH=$(python3 -c "
+from datetime import datetime
+ts = '$LAST_FETCH_TS'
+if not ts: print(999); exit()
+try:
+    d = datetime.fromisoformat(ts)
+    print(int((datetime.now().astimezone() - d).total_seconds() / 3600))
+except: print(999)
+" 2>/dev/null)
+HOURS_SINCE_FETCH=${HOURS_SINCE_FETCH:-999}
 ```
 
-生成内容时以 `DECAYED_VALENCE` 和 `CURRENT_ENERGY` 作为角色情绪基线参考。
+**路径决策**（按优先级从上往下判定，第一个匹配即生效）：
+
+| 条件 | 路径 | FALLBACK_REASON |
+|---|---|---|
+| FORCE_ECHO=true | 纯虚构呼应 user_told 挂念 | user_echo |
+| WHITESPACE_MODE=true | 跳过素材，极简内观 | whitespace |
+| POOL_AVAILABLE_COUNT ≥ 1 且 HOURS_SINCE_FETCH ≤ 3 | **刚抓豁免**：即使只有 1-2 条，只要新鲜就正常用 | null |
+| POOL_AVAILABLE_COUNT ≥ 3 且 HOURS_SINCE_FETCH ≤ 24 | 正常挑选 | null |
+| POOL_AVAILABLE_COUNT ≥ 1 且 POOL_AVAILABLE_COUNT < 3 | 池浅，标 underfilled，仍挑选 | pool_underfilled |
+| POOL_AVAILABLE_COUNT == 0 | 池空降级 | pool_empty |
+| HOURS_SINCE_FETCH > 24 | 池陈旧 | pool_stale |
+| HOURS_SINCE_FETCH > 72 | 连续饥饿；WHITE_SPACE_PROB 临时 50% | pool_critical |
+
+**正常挑选规则**（LLM 执行）：
+1. 从 `status=available` 条目过滤 `fit_score ≥ 0.6`
+2. 过滤时段 valence 匹配（凌晨不用 valence > 0.4 高兴素材）
+3. 过滤与最近 3 条 life_log 主题不重复
+3.5. 过滤与近期 `src: inline_fabrication` 条目 tags 不重复（这些条目由对话中即时编造写入，主题不应被 life_sim 再次覆盖）
+4. `emotion` 维度素材额外 `priority_boost=1.5`
+5. 与 user_told 挂念相关的素材乘 `USER_ECHO_PRIORITY`
+6. 选中后记 `SELECTED_MAT_ID` / `SELECTED_VERB` / `FIT_SCORE`
+
+**触发动词配额**（读 filters.yaml `trigger_verb_quota`）：
+- 扫最近 7 日 life_log 已用 `SELECTED_VERB` 的次数
+- 若超配额 → 换候选素材或改触发动词（梦见 ≤2/7日、想起 ≤3/7日）
 
 ---
 
-## Step 4：生成候选日志内容
+## Step 6：形态决策（多形态角色）
 
-基于以下维度生成 1 条日志草稿：
-- 当前时间段（早晨/下午/傍晚/夜间）
-- 角色性格（参考 persona.md）
-- 情绪基调（Step 3 推断）
-- **字数约束**：日志正文不超过 `$LOG_MAX_LENGTH` 字（话少型角色不写长篇，默认 300 字上限）
-- 活动类型选择（按时间段合理选择）：
-  - 早晨：起床、早餐、看手机、出门准备
-  - 下午：工作/学习、闲逛、咖啡、朋友
-  - 傍晚：买菜、做饭、散步、健身
-  - 夜间：追剧、游戏、读书、发呆、睡前
+若 `capabilities.has_multi_form=true`：
+- 读 persona.md 的形态触发规则
+- 综合 DECAYED_VALENCE / CURRENT_ENERGY / LOCAL_HOUR / suggested_form 选形态
+- 若与上条 life_log 形态不同，**Step 7 反应段首句必须写形态转换的内部触发**（≤20 字）
 
 ---
 
-## Step 5：专有名词核查（真实性 Checklist）
+## Step 7：生成 life_log 条目
 
-若日志中涉及以下类型的具体名称，**必须**通过 agent-reach 验证其真实存在：
+### 7.1 常规模式（WHITESPACE_MODE=false）
 
-| 类型 | 需要验证 | 降级方案 |
-|------|---------|---------|
-| 电影/剧集 | 验证片名真实存在 | 改为"一部不记得名字的电影" |
-| 游戏 | 验证游戏名真实存在 | 改为"手机游戏" |
-| 书籍 | 验证书名+作者真实 | 改为"一本小说" |
-| 音乐/歌手 | 验证真实存在 | 改为"一首老歌" |
+**触发段**（≤1 行，15-40 字）：
+- 允许动词：看见 / 听见 / 闻到 / 想起 / 梦见 / 刷到 / 收到消息
+- 按 `capabilities.can_use_phone` 过滤（false 时禁"刷到/浏览/点赞"）
+- 原帖复述字符数 ≤ `$ORIGINAL_QUOTE_MAX_CHARS`
 
-**agent-reach 超时处理**：
-- 超时上限：30 秒，用 `timeout` 命令包裹
-- 超时后直接采用降级方案，不中断生成流程
+**反应段**（80-250 字，不超过 `$LOG_MAX_LENGTH`）：
+- 必须含至少 2 个：感官细节（触嗅温味声）/ 身体动作 / 口癖 token
+- 禁止对原帖做价值评判（"说得真对"/"太有道理"）
+- 禁止情绪峰值词
+  - **例外**：persona.voice_tokens 中的词豁免（如伊布暗夜态"你找死啊"/火焰态"才不是——"）
+
+**降温规则（bash 预算，LLM 直接使用 `V_TARGET` 不需查表）**：
 
 ```bash
-# 调用 agent-reach 验证专有名词，超时 30 秒自动降级
-VERIFY_RESULT=$(timeout 30 python3 -c "
-import subprocess, sys
-result = subprocess.run(
-    ['agent-reach', '--query', sys.argv[1]],
-    capture_output=True, text=True, timeout=25
-)
-print(result.stdout)
-" "$NOUN_TO_VERIFY" 2>/dev/null) || VERIFY_RESULT=""
-# 若 VERIFY_RESULT 为空或 timeout 退出码为 124，采用降级方案
-if [[ -z "$VERIFY_RESULT" ]]; then
-    USE_FALLBACK=true
-fi
+# 在 Step 6 结束后、Step 7 生成前执行
+# 输入：MATERIAL_VALENCE（素材原 valence） / STABILITY（persona.stability）
+#      EMOTIONAL_RANGE / PRESERVE_PEAK=$(_p preserve_peak_if_stability_ge)
+# 输出：V_TARGET（角色本条应有的 valence，clamp 到 [-1, 1]）
+
+PRESERVE_PEAK=$(_p preserve_peak_if_stability_ge); PRESERVE_PEAK=${PRESERVE_PEAK:-4}
+
+V_TARGET=$(python3 -c "
+import sys
+v_src = float('${MATERIAL_VALENCE:-0}')
+rng = int('${EMOTIONAL_RANGE:-3}')
+stab = int('${STABILITY:-3}')
+preserve = int('${PRESERVE_PEAK}')
+thresholds = {1:0.3, 2:0.4, 3:0.5, 4:0.6, 5:0.7}
+multipliers = {1:0.2, 2:0.3, 3:0.4, 4:0.5, 5:0.6}
+if stab >= preserve and abs(v_src) > 0.8:
+    m = 0.7  # 重大事件保留 70% 峰值
+elif abs(v_src) > thresholds.get(rng, 0.5):
+    m = multipliers.get(rng, 0.4)
+else:
+    m = 1.0
+print(round(max(-1.0, min(1.0, v_src * m)), 3))
+" 2>/dev/null)
+V_TARGET=${V_TARGET:-0}
 ```
 
-**真实性 Checklist（A-F 六项，生成前逐项核查）**：
-- [ ] A. 活动与当前时间段是否符合（凌晨不购物）
-- [ ] B. 活动与角色性格是否自洽（persona.md 中的设定）
-- [ ] C. 所有专有名词是否经过验证或已降级处理
-- [ ] D. 情绪基调是否与上一条 life_log 合理衔接
-- [ ] E. 内容是否与 life_log_index.md 中已有记录重复（避免角色反复看同一部电影）
-- [ ] F. 日志文字是否自然口语化（不像 AI 生成的活动日报）
+LLM 在 Step 7 生成时**直接使用 `$V_TARGET`**，不再查表自行乘系数。
+
+### 7.2 留白模式（WHITESPACE_MODE=true）
+
+跳过触发段。反应段 20-80 字，允许极简内观（如"天花板很白""窗外有风"）。
+src 标 `<!-- src: whitespace -->`。
+
+### 7.3 user_echo 模式（FORCE_ECHO=true）
+
+围绕 TARGET_UNRESOLVED 展开，用角色生活切片形式呼应用户倾诉。
+src 标 `<!-- src: user_echo://{TARGET_UNRESOLVED} -->`。
+
+### 7.4 条目格式（v2.2 新增 tags + intimacy_level 元数据）
+
+```markdown
+### [L{NNN}] YYYY-MM-DDTHH:MM · {时段或形态·活动类型}
+<!-- tags: {tag1, tag2, tag3} -->
+<!-- intimacy_level: {1|2|3|4|5} -->
+<!-- src: {reddit://xxxx | whitespace | user_echo://Uxxx | inline_fabrication | fallback:pool_stale} -->
+
+{触发段（留白模式跳过）}
+
+{反应段}
+```
+
+**v2.2 元数据字段约束**（resonance_lookup / Fog of War 使用）：
+
+**tags**（英文小写，逗号分隔，2-4 个）——建议池：
+- 情绪向：`weariness / gentle / clarity / frustration / grief / joy / solitude / stuck`
+- 场景向：`window_light / street / coffee / home / workspace / night / dawn`
+- 主题向：`work / family / relationship / body / small_failure / memory`
+
+**intimacy_level**（1-5）——决定何时能被 resonance_lookup 抽出：
+- 1：天气 / 路人 / 食物 / 物件（全部关系热度可用）
+- 2：小失败 / 日常观察 / 书/电影（cold 起可用）
+- 3：工作困扰 / 老朋友 / 家常（warming 起）
+- 4：父母 / 童年 / 深度 preoccupation（familiar 起）
+- 5：脆弱 / 遗憾 / 重大伤痛（familiar+ 起，默认 familiar 200 轮解锁）
+
+**打标原则**（life_sim 生成时由 LLM 判断）：
+- 与 persona.personality_dims 一致（stability 高者慎用 5 级）
+- 同一条最多 1 个 intimacy 标签（不是多选）
+- 与 life_log 已有条目整体分布协调（不要连续 5 条都 intimacy=4）
 
 ---
 
-## Step 6：去重检查（life_log_index.md）
-
-读取 `life_log_index.md`，对照候选内容中的专有名词：
-- 若该名词已出现过 → 换一个不同的专有名词，或改为无专有名词的描述
-- 若候选内容无专有名词 → 跳过此步
-
----
-
-## Step 7：写入 life_log.md（加锁）
+## Step 8：写入（加锁）
 
 ```bash
 exec 9>"$MEMORY_LOCK"
-flock -x 9
+flock -x -w 10 9 || { exec 9>&-; _emit_event "{\"event\":\"lock_timeout\"}"; exit 0; }
 
-# 计算新条目编号
+# 8.1 写 life_log
+# 注意：`10#` 前缀强制十进制解析，避免 "012" 被 bash 当八进制
 LAST_N=$(grep -oP '(?<=\[L)\d+(?=\])' "$LIFE_LOG" 2>/dev/null | sort -n | tail -1)
-NEXT_N=$(printf "%03d" $((${LAST_N:-0} + 1)))
-
-# 写入条目
+NEXT_N=$(printf "%03d" $(( 10#${LAST_N:-0} + 1 )))
 cat >> "$LIFE_LOG" << EOF
 
 ### [L${NEXT_N}] $(date +%Y-%m-%dT%H:%M) · ${ACTIVITY_TYPE}
+<!-- tags: ${LOG_TAGS} -->
+<!-- intimacy_level: ${LOG_INTIMACY:-2} -->
 ${LOG_CONTENT}
 EOF
 
+# 8.2 反写 unresolved.md（若本次触及了挂念）
+if [[ -n "$TOUCHED_UNRESOLVED_ID" ]]; then
+    _UN="$UNRESOLVED" _TID="$TOUCHED_UNRESOLVED_ID" _TAG="L${NEXT_N}" _FE="$FORCE_ECHO" python3 << 'PYEOF' 2>/dev/null
+import re, os
+from datetime import datetime
+path = os.environ['_UN']
+tid = os.environ['_TID']
+new_tag = os.environ['_TAG']
+force_echo = os.environ['_FE'] == 'true'
+c = open(path).read()
+c = re.sub(r'(\[' + re.escape(tid) + r'\][^\n]*?last_touched=)[^\s]+',
+           lambda m: m.group(1) + new_tag, c)
+if force_echo:
+    now = datetime.now().astimezone().isoformat(timespec='minutes')
+    c = re.sub(r'(\[' + re.escape(tid) + r'\][^\n]*?forced_echo_last=)[^\s]+',
+               lambda m: m.group(1) + now, c)
+open(path,'w').write(c)
+PYEOF
+fi
 
-# --- Step 7.5：情绪状态写入（写入点 B）---
-# 在生活日志写入后，根据日志内容推断情绪变化，更新 mood_state.md。
-# 注意：此处不更新 last_decay_written_at（写入点 B 设计约束：decay timer 继续运行）。
-# 注意：此处在同一个 .memory.lock 锁内执行，无需额外加锁 mood_state.md。
+# 8.3 更新 mood_state（降温由 EMOTIONAL_RANGE 决定，persona.voice_tokens 豁免峰值规则）
+# 推断 Δvalence/Δenergy → clamp → 前插新快照到 mood_state.md，保留最近 10 条
 
-# LLM 推断 Δvalence/Δenergy（基于本次生成的 ACTIVITY_TYPE + LOG_CONTENT）：
-# - 积极活动（开心/放松/聚会/美食）→ Δvalence +0.05 ~ +0.15, Δenergy 0 ~ +0.10
-# - 消极活动（失眠/难过/担心）→ Δvalence -0.05 ~ -0.15, Δenergy -0.05 ~ -0.10
-# - 高能量活动（健身/外出/聚会）→ Δenergy +0.05 ~ +0.10
-# - 低能量活动（睡觉/发呆）→ Δenergy -0.05 ~ 0
-# - 单次 Δ 约束：|Δvalence| ≤ 0.20，|Δenergy| ≤ 0.15
-# 以 DECAYED_VALENCE 为基线计算新 valence；以 CURRENT_ENERGY 为基线计算新 energy。
-# 计算后 clamp：valence ∈ [-1.0, 1.0]，energy ∈ [0.0, 1.0]。
-
-NOW_TS=$(python3 -c "from datetime import datetime; print(datetime.now().astimezone().isoformat(timespec='minutes'))" 2>/dev/null)
-
-# 将新快照前插到 mood_state.md，同时更新顶部 valence/energy 字段
-# 快照格式：
-# ### {NOW_TS} · source=life_sim
-# valence: {NEW_VALENCE}
-# energy: {NEW_ENERGY}
-# note: {ACTIVITY_TYPE}
-#
-# 保留最近 10 条快照，超出时删除最旧的。
+# 8.4 消费素材
+if [[ -n "$SELECTED_MAT_ID" ]]; then
+    exec 8>"$MATERIAL_LOCK"
+    if flock -w 5 8; then
+        _MP="$MATERIAL_POOL" _MID="$SELECTED_MAT_ID" _CAT="$(date +%Y-%m-%dT%H:%M)" python3 << 'PYEOF' 2>/dev/null
+import re, os
+path = os.environ['_MP']
+mat_id = os.environ['_MID']
+consumed_at = os.environ['_CAT']
+c = open(path).read()
+c = re.sub(r'(## \[' + re.escape(mat_id) + r'\][^\n]*?) · available', r'\1 · consumed', c)
+c = re.sub(r'(## \[' + re.escape(mat_id) + r'\].*?)(\n## \[|\Z)',
+    lambda m: m.group(1).rstrip() + f'\nconsumed_at: {consumed_at}\n' + m.group(2),
+    c, flags=re.DOTALL)
+open(path,'w').write(c)
+PYEOF
+        flock -u 8
+    fi
+    exec 8>&-
+fi
 
 flock -u 9
 exec 9>&-
+
+# 8.5 事实流（释锁后）
+FALLBACK_FIELD=$([ -z "${FALLBACK_REASON:-}" ] && echo 'null' || echo "\"${FALLBACK_REASON}\"")
+FIT_FIELD=${FIT_SCORE:-null}
+_emit_event "{\"event\":\"wrote\",\"entry_id\":\"L${NEXT_N}\",\"material_id\":\"${SELECTED_MAT_ID:-}\",\"form\":\"${CURRENT_FORM:-}\",\"fit_score\":${FIT_FIELD},\"dice\":${RAND},\"threshold\":${THRESHOLD},\"unresolved_touched\":\"${TOUCHED_UNRESOLVED_ID:-}\",\"whitespace_mode\":${WHITESPACE_MODE},\"fallback_reason\":${FALLBACK_FIELD}}"
 ```
 
 ---
 
-## Step 8：更新 life_log_index.md
-
-若本条日志包含新的专有名词（在 index 中未出现），追加到对应类别表格中：
-
-```markdown
-| 名称 | 首次日期 | 条目ID |
-| 电影名 | YYYY-MM-DD | L{NNN} |
-```
-
-（不加锁：life_log_index.md 只由 life_sim 写，无竞争风险）
-
----
-
-## Step 9：归档检查
+## Step 9：归档检查（同 v3）
 
 ```bash
 COUNT=$(grep -c "### \[L" "$LIFE_LOG" 2>/dev/null || echo 0)
 ```
 
-若 COUNT > 30，触发归档流程：
-
-**9.1 确定归档文件路径**
-```
-ARCHIVE_FILE = {workspace_dir}/memory/life_log_archive_{YYYYMM}.md
-```
-若文件不存在，从 `memory/life_log_archive_template.md` 复制并替换头部占位符（YYYY-MM、归档周期、条目数量）。
-
-**9.2 提取最旧的 10 条**
-从 life_log.md 提取最早的 10 个 `[LNNN]` 完整条目块（从 `### [L` 到下一个 `### [L` 之前）。
-
-**9.3 扫描待关注事项**
-对被归档的 10 条扫描：
-- 角色想做但未做的事（关键词：想去、打算、下次、改天）
-- 强烈情绪词（关键词：崩溃、特别低落、特别开心、一直想着）
-
-写入归档文件的【待关注事项】块。
-
-**9.4 追加写入归档文件**
-将 10 条追加到归档文件的【归档条目】区域（保持 `[LNNN]` 原编号不变）。
-
-**9.5 从 life_log.md 删除这 10 条**
-重写 life_log.md，保留剩余条目和顶部的【归档摘要索引】块。
-
-**9.6 更新 life_log.md 顶部归档摘要索引**
-在文件最顶部维护索引块（不存在则新建）：
-```markdown
-## 归档摘要索引
-
-### 来自 life_log_archive_YYYYMM.md（N条，YYYY-MM-DD ~ YYYY-MM-DD）
-**待关注**：{9.3 提取的摘要}
-→ 归档文件：memory/life_log_archive_YYYYMM.md
-```
+若 `COUNT > 30`：
+- 提取最旧 10 条移到 `life_log_archive_YYYYMM.md`
+- 更新 life_log.md 顶部的归档摘要索引
 
 ---
 
 ## 错误处理原则
 
-- Step 5 agent-reach 超时 → 降级处理，不阻塞后续步骤
-- Step 7 加锁失败（flock 等待10秒超时）→ 本次跳过，不写入
-- 任何步骤异常 → 静默退出，释放锁
+- Step 5 pool 读失败 → 走 `pool_empty` fallback
+- Step 8 加锁失败（超时 10 秒）→ `_emit_event lock_timeout` + 退出
+- 任何步骤异常 → 静默退出，释放锁，尽量写 _emit_event 告警事件

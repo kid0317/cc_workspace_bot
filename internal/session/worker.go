@@ -43,10 +43,10 @@ type Worker struct {
 	appCfg      *config.AppConfig
 	db          *gorm.DB
 	executor    *claude.Executor
-	sender      *feishu.Sender  // kept for backward-compat with newWorker callers
-	senderIface senderIface     // used by all send helpers; set from sender in newWorker
+	sender      *feishu.Sender // kept for backward-compat with newWorker callers
+	senderIface senderIface    // used by all send helpers; set from sender in newWorker
 	idleTimeout time.Duration
-	segmentOpts SegmentOptions  // must be initialised via DefaultSegmentOptions()
+	segmentOpts SegmentOptions // must be initialised via DefaultSegmentOptions()
 
 	queue  chan *feishu.IncomingMessage
 	stopCh chan struct{}
@@ -200,12 +200,34 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 		return
 	}
 
+	// Hook exit-2 causes Claude Code to emit is_error=true with empty text.
+	// In companion mode this is a silent discard — the trigger check blocked
+	// the message intentionally (crisis / closing signal), no reply needed.
+	// Real API errors carry non-empty ErrorText; log those at Error level so
+	// they remain visible in monitoring even though we still discard silently.
+	if result.IsError && w.appCfg.IsCompanion() {
+		if result.ErrorText != "" {
+			slog.Error("companion claude error (discarding silently)",
+				"channel", w.channelKey, "error_text", result.ErrorText)
+		} else {
+			slog.Info("companion hook blocked message, discarding silently", "channel", w.channelKey)
+		}
+		return
+	}
+
 	w.persistResult(sess, result)
 
 	// Guard against claude returning success but empty text (e.g. context
 	// overflow on --resume). Notify the user instead of leaving the thinking
 	// card hanging indefinitely.
 	if result.Text == "" {
+		slog.Warn("claude returned empty text", "channel", w.channelKey)
+		if w.appCfg.IsCompanion() {
+			// Stay in character but guide the user to /new — retrying won't help.
+			_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType,
+				"……我们聊了好久了，重新开始一下好吗？")
+			return
+		}
 		w.replyError(ctx, msg, cardMsgID,
 			fmt.Errorf("AI 返回为空，可能是会话上下文过长。请发送 /new 开启新会话后重试"))
 		return
@@ -216,10 +238,17 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 
 // runClaude invokes the Claude executor and returns the result.
 func (w *Worker) runClaude(ctx context.Context, sess *model.Session, msg *feishu.IncomingMessage) (*claude.ExecuteResult, error) {
+	// Companion mode: always start a fresh Claude session (no --resume).
+	// Context is injected per-turn via hooks (RECENT_HISTORY.md), so no
+	// conversation continuity is lost.
+	claudeSessionID := sess.ClaudeSessionID
+	if w.appCfg.IsCompanion() {
+		claudeSessionID = ""
+	}
 	return w.executor.Execute(ctx, &claude.ExecuteRequest{
 		Prompt:          msg.Prompt,
 		SessionID:       sess.ID,
-		ClaudeSessionID: sess.ClaudeSessionID,
+		ClaudeSessionID: claudeSessionID,
 		AppConfig:       w.appCfg,
 		WorkspaceDir:    w.appCfg.WorkspaceDir,
 		ChannelKey:      w.channelKey,
@@ -238,13 +267,28 @@ func (w *Worker) sendThinkingCard(ctx context.Context, msg *feishu.IncomingMessa
 
 // persistResult saves the claude_session_id and the assistant message to DB.
 // [[SEND]] markers are stripped before storing to keep DB and resume context clean.
+// Fix-10: API Error results are not persisted to avoid polluting RECENT_HISTORY.
 func (w *Worker) persistResult(sess *model.Session, result *claude.ExecuteResult) {
-	if result.ClaudeSessionID != "" && sess.ClaudeSessionID == "" {
+	// Companion mode never stores the Claude session ID — each turn must start fresh.
+	if result.ClaudeSessionID != "" && sess.ClaudeSessionID == "" && !w.appCfg.IsCompanion() {
 		if err := w.db.Model(sess).Update("claude_session_id", result.ClaudeSessionID).Error; err != nil {
 			slog.Error("update claude_session_id", "err", err)
 		}
 	}
+	if result.IsError || strings.HasPrefix(result.Text, "API Error:") {
+		prefix := result.Text
+		if len(prefix) > 60 {
+			prefix = prefix[:60]
+		}
+		slog.Warn("skip persisting error result to DB",
+			"is_error", result.IsError,
+			"text_prefix", prefix)
+		return
+	}
 	storedText := strings.ReplaceAll(result.Text, "[[SEND]]", "\n")
+	if storedText == "" {
+		return // nothing meaningful to persist (e.g. context-overflow empty result)
+	}
 	w.recordMessage(sess.ID, "", "assistant", storedText, "")
 }
 
@@ -321,8 +365,15 @@ func (w *Worker) sendCompanionSegments(ctx context.Context, msg *feishu.Incoming
 }
 
 // replyError surfaces execution errors to the user.
+// Fix-13: companion mode sends a character-appropriate in-role message instead of a raw error.
 func (w *Worker) replyError(ctx context.Context, msg *feishu.IncomingMessage, cardMsgID string, err error) {
 	slog.Error("claude execute", "err", err)
+	if w.appCfg.IsCompanion() {
+		// Companion mode: stay in character, do not expose technical error text.
+		_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType,
+			"……刚才发呆了一下，再说一次好不好？")
+		return
+	}
 	reply := fmt.Sprintf("❌ 执行出错：%s", err.Error())
 	if cardMsgID != "" {
 		_ = w.senderIface.UpdateCard(ctx, cardMsgID, reply)

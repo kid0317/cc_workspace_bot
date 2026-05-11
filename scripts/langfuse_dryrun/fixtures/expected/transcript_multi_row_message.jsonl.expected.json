@@ -1,0 +1,89 @@
+{
+  "distinct_messages": 2,
+  "is_subagent": false,
+  "rows_assistant": 4,
+  "rows_total": 6,
+  "traces": [
+    {
+      "id": "6e747f7f9098dfb0023bbc2c2fe6e4f4",
+      "input": "do a tool call",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 1",
+      "observations": [
+        {
+          "id": "0be3811a60cd216fd671a99c94c6b121",
+          "input_preview": "do a tool call",
+          "message_id": "msg_split_A",
+          "model": "claude-opus-4-7",
+          "name": "claude-opus-4-7",
+          "output_text": "",
+          "request_id": "req_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [
+            {
+              "id": "toolu_001",
+              "input": {
+                "command": "ls"
+              },
+              "name": "Bash"
+            },
+            {
+              "id": "toolu_002",
+              "input": {
+                "file_path": "/tmp/x"
+              },
+              "name": "Read"
+            }
+          ],
+          "type": "generation",
+          "usage_details": {
+            "input": 6,
+            "input_cache_creation_1h": 46372,
+            "input_cache_creation_5m": 0,
+            "input_cache_read": 0,
+            "output": 438
+          },
+          "usage_source": "reported"
+        },
+        {
+          "id": "68239e8b2276cc1c8caa0e8b74019adb",
+          "input_preview": "do a tool call",
+          "message_id": "msg_split_B",
+          "model": "claude-opus-4-7",
+          "name": "claude-opus-4-7",
+          "output_text": "all done",
+          "request_id": "req_002",
+          "started_at": "2026-05-06T10:00:01.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 1,
+            "input_cache_creation_1h": 556,
+            "input_cache_creation_5m": 0,
+            "input_cache_read": 46372,
+            "output": 50
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "transcript_multi_row_message.jsonl",
+  "turns_emitted": 1
+}

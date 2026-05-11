@@ -1,0 +1,93 @@
+{
+  "distinct_messages": 2,
+  "is_subagent": false,
+  "rows_assistant": 2,
+  "rows_total": 4,
+  "traces": [
+    {
+      "id": "aee1b673782a4536b13f243bc48cee14",
+      "input": "first question",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 1",
+      "observations": [
+        {
+          "id": "ac27859c3a53a0bc3899a240322a58a6",
+          "input_preview": "first question",
+          "message_id": "msg_t1_A",
+          "model": "claude-haiku-4-5-20251001",
+          "name": "claude-haiku-4-5-20251001",
+          "output_text": "first answer",
+          "request_id": "req_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 20,
+            "output": 10
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    },
+    {
+      "id": "9fccdf39abb9827ec13e2582ebdaf453",
+      "input": "second question",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 2",
+      "observations": [
+        {
+          "id": "e7bb175437070a553129b9badf3f532a",
+          "input_preview": "second question",
+          "message_id": "msg_t2_A",
+          "model": "claude-sonnet-4-6",
+          "name": "claude-sonnet-4-6",
+          "output_text": "second answer",
+          "request_id": "req_002",
+          "started_at": "2026-05-06T10:00:01.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 30,
+            "input_cache_read": 20,
+            "output": 15
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 2,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "transcript_multi_turn.jsonl",
+  "turns_emitted": 2
+}

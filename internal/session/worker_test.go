@@ -24,9 +24,9 @@ import (
 // mockSender records calls for inspection in tests.
 type mockSender struct {
 	mu           sync.Mutex
-	sendTexts    []string    // args to SendText
-	sendTextErrs []error     // errors to return, cycled
-	updateCards  []string    // args to UpdateCard
+	sendTexts    []string // args to SendText
+	sendTextErrs []error  // errors to return, cycled
+	updateCards  []string // args to UpdateCard
 	errIdx       int
 }
 

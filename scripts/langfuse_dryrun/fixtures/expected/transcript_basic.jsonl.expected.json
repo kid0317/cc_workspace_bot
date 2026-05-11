@@ -1,0 +1,51 @@
+{
+  "distinct_messages": 1,
+  "is_subagent": false,
+  "rows_assistant": 1,
+  "rows_total": 2,
+  "traces": [
+    {
+      "id": "cb86e0b1443e82c9a45f5807c4f421ca",
+      "input": "hello",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 1",
+      "observations": [
+        {
+          "id": "97399b8f7da6de720f30d8268eeb6303",
+          "input_preview": "hello",
+          "message_id": "msg_basic_001",
+          "model": "claude-sonnet-4-6",
+          "name": "claude-sonnet-4-6",
+          "output_text": "hi there",
+          "request_id": "req_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 10,
+            "output": 5
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "transcript_basic.jsonl",
+  "turns_emitted": 1
+}

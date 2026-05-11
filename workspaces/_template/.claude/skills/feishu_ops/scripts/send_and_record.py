@@ -45,7 +45,10 @@ def main() -> None:
         auth.output_error(f"db_path 不存在：{args.db_path}")
 
     msg_id = str(uuid.uuid4())
-    now_iso = datetime.now().astimezone().isoformat(timespec='seconds')
+    # 用空格分隔符 + microseconds，匹配 GORM 写入格式（"YYYY-MM-DD HH:MM:SS.ffffff+TZ"）。
+    # SQL ORDER BY created_at 是字符串比较，T 分隔符会让本脚本的记录被错排，
+    # 导致 inject_history.py 生成的 RECENT_HISTORY.md 时序紊乱。
+    now_iso = datetime.now().astimezone().isoformat(sep=' ', timespec='microseconds')
 
     try:
         conn = sqlite3.connect(str(db_path))

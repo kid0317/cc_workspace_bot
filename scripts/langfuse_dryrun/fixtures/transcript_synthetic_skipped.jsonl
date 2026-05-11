@@ -1,0 +1,3 @@
+{"type":"user","uuid":"u-user-1","message":{"role":"user","content":"hi"}}
+{"type":"assistant","uuid":"u-asst-1","requestId":"req_001","timestamp":"2026-05-06T10:00:00.000Z","message":{"id":"msg_real_001","model":"claude-opus-4-7","content":[{"type":"text","text":"real reply"}],"usage":{"input_tokens":5,"output_tokens":3}}}
+{"type":"assistant","uuid":"u-asst-2","requestId":"req_002","timestamp":"2026-05-06T10:00:00.001Z","message":{"id":"msg_syn_001","model":"<synthetic>","content":[{"type":"text","text":"synthetic context summary"}],"usage":{"input_tokens":0,"output_tokens":0}}}

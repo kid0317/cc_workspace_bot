@@ -10,6 +10,33 @@ import (
 	"github.com/kid0317/cc-workspace-bot/internal/config"
 )
 
+func TestAssertInsideWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	tests := []struct {
+		name    string
+		dir     string
+		wantErr bool
+	}{
+		{"direct subdirectory", filepath.Join(ws, "sessions", "abc"), false},
+		{"nested system path", filepath.Join(ws, "sessions", "_system", "slug"), false},
+		{"workspace itself", ws, false},
+		{"parent escape via ..", filepath.Join(ws, "..", "evil"), true},
+		{"absolute outside", "/tmp/definitely-outside-evil", true},
+		{"sibling directory", filepath.Join(ws, "..", filepath.Base(ws)+"-other"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := assertInsideWorkspace(ws, tt.dir)
+			if tt.wantErr && err == nil {
+				t.Errorf("assertInsideWorkspace(%q, %q) expected error, got nil", ws, tt.dir)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("assertInsideWorkspace(%q, %q) unexpected error: %v", ws, tt.dir, err)
+			}
+		})
+	}
+}
+
 func TestChannelKeyToRoutingKey(t *testing.T) {
 	tests := []struct {
 		channelKey string
@@ -48,6 +75,9 @@ func TestInjectRoutingContext(t *testing.T) {
 		}
 		if !strings.Contains(got, "sender_id: ou_abc") {
 			t.Errorf("missing sender_id in output: %q", got)
+		}
+		if !strings.Contains(got, "current_time: ") {
+			t.Errorf("missing current_time in output: %q", got)
 		}
 		if !strings.HasSuffix(got, "hello") {
 			t.Errorf("original prompt not preserved: %q", got)
@@ -124,9 +154,9 @@ func TestResolveProvider(t *testing.T) {
 		wantPC   config.ProviderConfig
 	}{
 		{
-			name:   "no config at all defaults to anthropic",
-			app:    config.AppClaudeConfig{},
-			claude: config.ClaudeConfig{},
+			name:     "no config at all defaults to anthropic",
+			app:      config.AppClaudeConfig{},
+			claude:   config.ClaudeConfig{},
 			wantName: "anthropic",
 			wantPC:   config.ProviderConfig{},
 		},
@@ -181,8 +211,8 @@ func TestResolveProvider(t *testing.T) {
 			wantPC:   config.ProviderConfig{BaseURL: "https://bl", AuthToken: "key", Model: "kimi-k2.5"},
 		},
 		{
-			name:   "trims whitespace from provider name",
-			app:    config.AppClaudeConfig{Provider: "  bailian  "},
+			name: "trims whitespace from provider name",
+			app:  config.AppClaudeConfig{Provider: "  bailian  "},
 			claude: config.ClaudeConfig{
 				Providers: map[string]config.ProviderConfig{
 					"bailian": {AuthToken: "key"},
@@ -192,9 +222,9 @@ func TestResolveProvider(t *testing.T) {
 			wantPC:   config.ProviderConfig{AuthToken: "key"},
 		},
 		{
-			name:   "unknown provider returns empty config",
-			app:    config.AppClaudeConfig{Provider: "unknown"},
-			claude: config.ClaudeConfig{},
+			name:     "unknown provider returns empty config",
+			app:      config.AppClaudeConfig{Provider: "unknown"},
+			claude:   config.ClaudeConfig{},
 			wantName: "unknown",
 			wantPC:   config.ProviderConfig{},
 		},
@@ -264,6 +294,77 @@ func TestBuildClaudeEnvVars(t *testing.T) {
 	})
 }
 
+func TestBuildLangfuseEnvVars(t *testing.T) {
+	t.Run("user message: minimal required fields", func(t *testing.T) {
+		req := &ExecuteRequest{
+			AppConfig:    &config.AppConfig{ID: "yzk_worker"},
+			SessionID:    "sess-abc",
+			ChannelKey:   "p2p:oc_xxx:cli_yyy",
+			SenderID:     "ou_open_id_zzz",
+			WorkspaceDir: "/tmp/ws",
+		}
+		envs := buildLangfuseEnvVars(req, "")
+		assertEnvContains(t, envs, "CC_LF_APP_ID", "yzk_worker")
+		assertEnvContains(t, envs, "CC_LF_CHANNEL_KEY", "p2p:oc_xxx:cli_yyy")
+		assertEnvContains(t, envs, "CC_LF_USER_OPEN_ID", "ou_open_id_zzz")
+		assertEnvContains(t, envs, "CC_LF_FRAMEWORK_SESSION_ID", "sess-abc")
+		assertEnvContains(t, envs, "CC_LF_META_VERSION", "1")
+		assertEnvNotPresent(t, envs, "CC_LF_TASK_NAME")
+	})
+
+	t.Run("scheduled task: includes task name", func(t *testing.T) {
+		req := &ExecuteRequest{
+			AppConfig:  &config.AppConfig{ID: "yzk_worker"},
+			SessionID:  "sess-task-1",
+			ChannelKey: "p2p:oc_xxx:cli_yyy",
+			SenderID:   "ou_creator",
+		}
+		envs := buildLangfuseEnvVars(req, "daily_briefing")
+		assertEnvContains(t, envs, "CC_LF_TASK_NAME", "daily_briefing")
+		assertEnvContains(t, envs, "CC_LF_FRAMEWORK_SESSION_ID", "sess-task-1")
+	})
+
+	t.Run("nil app config returns nil", func(t *testing.T) {
+		envs := buildLangfuseEnvVars(&ExecuteRequest{SessionID: "x"}, "")
+		if envs != nil {
+			t.Errorf("expected nil when AppConfig is nil, got %v", envs)
+		}
+	})
+
+	t.Run("nil request returns nil", func(t *testing.T) {
+		envs := buildLangfuseEnvVars(nil, "")
+		if envs != nil {
+			t.Errorf("expected nil for nil request, got %v", envs)
+		}
+	})
+
+	t.Run("missing session id returns nil (sentinel for hook to skip)", func(t *testing.T) {
+		req := &ExecuteRequest{
+			AppConfig: &config.AppConfig{ID: "x"},
+			// no SessionID
+		}
+		envs := buildLangfuseEnvVars(req, "")
+		if envs != nil {
+			t.Errorf("expected nil when SessionID missing, got %v", envs)
+		}
+	})
+
+	t.Run("env var values do not contain newlines or unsafe shell chars", func(t *testing.T) {
+		// Defensive: app_id / channel_key are user-influenced (config + Feishu IDs)
+		req := &ExecuteRequest{
+			AppConfig:  &config.AppConfig{ID: "weird\nid"},
+			SessionID:  "sess",
+			ChannelKey: "ch",
+		}
+		envs := buildLangfuseEnvVars(req, "")
+		for _, e := range envs {
+			if strings.Contains(e, "\n") {
+				t.Errorf("env var contains newline: %q", e)
+			}
+		}
+	})
+}
+
 func TestBuildSettingsJSON(t *testing.T) {
 	t.Run("bailian provider returns JSON with env overrides", func(t *testing.T) {
 		pc := config.ProviderConfig{BaseURL: "https://bl", AuthToken: "key123", Model: "kimi-k2.5"}
@@ -304,6 +405,30 @@ func TestBuildSettingsJSON(t *testing.T) {
 		if parsed["env"]["ANTHROPIC_BASE_URL"] != "https://coding.dashscope.aliyuncs.com/apps/anthropic" {
 			t.Errorf("expected fallback URL, got %q", parsed["env"]["ANTHROPIC_BASE_URL"])
 		}
+	})
+}
+
+func TestBuildArgs_AddDirFlag(t *testing.T) {
+	t.Run("--add-dir set to WorkspaceDir", func(t *testing.T) {
+		cfg := &config.Config{Claude: config.ClaudeConfig{MaxTurns: 20}}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg, WorkspaceDir: "/tmp/ws"}
+		args := e.buildArgs("hi", req, "/tmp/ws/sessions/s1")
+		assertHasFlag(t, args, "--add-dir", "/tmp/ws")
+	})
+
+	t.Run("no --add-dir when WorkspaceDir empty", func(t *testing.T) {
+		cfg := &config.Config{Claude: config.ClaudeConfig{MaxTurns: 20}}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg}
+		args := e.buildArgs("hi", req, "/tmp/session")
+		assertNoFlag(t, args, "--add-dir")
 	})
 }
 
@@ -357,6 +482,84 @@ func TestBuildArgs_ModelFlag(t *testing.T) {
 		req := &ExecuteRequest{AppConfig: appCfg}
 		args := e.buildArgs("hi", req, "/tmp/session")
 		assertNoFlag(t, args, "--model")
+	})
+}
+
+func TestBuildArgs_EffortFlag(t *testing.T) {
+	t.Run("--effort from provider config", func(t *testing.T) {
+		cfg := &config.Config{
+			Claude: config.ClaudeConfig{
+				MaxTurns:        20,
+				DefaultProvider: "anthropic",
+				Providers: map[string]config.ProviderConfig{
+					"anthropic": {Model: "sonnet", Effort: "medium"},
+				},
+			},
+		}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg}
+		args := e.buildArgs("hi", req, "/tmp/session")
+		assertHasFlag(t, args, "--effort", "medium")
+	})
+
+	t.Run("app effort overrides provider default", func(t *testing.T) {
+		cfg := &config.Config{
+			Claude: config.ClaudeConfig{
+				MaxTurns:        20,
+				DefaultProvider: "anthropic",
+				Providers: map[string]config.ProviderConfig{
+					"anthropic": {Model: "sonnet", Effort: "low"},
+				},
+			},
+		}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits", Effort: "high"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg}
+		args := e.buildArgs("hi", req, "/tmp/session")
+		assertHasFlag(t, args, "--effort", "high")
+	})
+
+	t.Run("no --effort when unset", func(t *testing.T) {
+		cfg := &config.Config{
+			Claude: config.ClaudeConfig{
+				MaxTurns:        20,
+				DefaultProvider: "anthropic",
+				Providers: map[string]config.ProviderConfig{
+					"anthropic": {Model: "sonnet"},
+				},
+			},
+		}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg}
+		args := e.buildArgs("hi", req, "/tmp/session")
+		assertNoFlag(t, args, "--effort")
+	})
+
+	t.Run("no --effort for non-anthropic provider", func(t *testing.T) {
+		cfg := &config.Config{
+			Claude: config.ClaudeConfig{
+				MaxTurns:        20,
+				DefaultProvider: "bailian",
+				Providers: map[string]config.ProviderConfig{
+					"bailian": {Model: "qwen-plus", Effort: "high"},
+				},
+			},
+		}
+		appCfg := &config.AppConfig{
+			Claude: config.AppClaudeConfig{PermissionMode: "acceptEdits", Effort: "max"},
+		}
+		e := &Executor{cfg: cfg}
+		req := &ExecuteRequest{AppConfig: appCfg}
+		args := e.buildArgs("hi", req, "/tmp/session")
+		assertNoFlag(t, args, "--effort")
 	})
 }
 
@@ -440,10 +643,10 @@ func assertNoFlag(t *testing.T, args []string, flag string) {
 
 func TestWriteSessionContext(t *testing.T) {
 	tests := []struct {
-		name       string
-		req        *ExecuteRequest
-		dbPath     string
-		wantLines  []string
+		name      string
+		req       *ExecuteRequest
+		dbPath    string
+		wantLines []string
 	}{
 		{
 			name: "all fields written",
@@ -513,3 +716,127 @@ func TestWriteSessionContext(t *testing.T) {
 	}
 }
 
+func TestParseLine_ResultEventCapturesError(t *testing.T) {
+	e := &Executor{}
+	tests := []struct {
+		name        string
+		line        string
+		wantIsErr   bool
+		wantErrText string
+	}{
+		{
+			name:        "error result with is_error and result text",
+			line:        `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 400 messages.0: Invalid signature","cost_usd":0.001,"duration_ms":120}`,
+			wantIsErr:   true,
+			wantErrText: "API Error: 400 messages.0: Invalid signature",
+		},
+		{
+			name:        "successful result clears nothing",
+			line:        `{"type":"result","subtype":"success","is_error":false,"result":"ok","cost_usd":0.01,"duration_ms":300}`,
+			wantIsErr:   false,
+			wantErrText: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &ExecuteResult{}
+			e.parseLine(tc.line, r)
+			if r.IsError != tc.wantIsErr {
+				t.Errorf("IsError = %v, want %v", r.IsError, tc.wantIsErr)
+			}
+			if r.ErrorText != tc.wantErrText {
+				t.Errorf("ErrorText = %q, want %q", r.ErrorText, tc.wantErrText)
+			}
+		})
+	}
+}
+
+func TestParseLine_AssistantTextStillAccumulates(t *testing.T) {
+	// Regression guard: adding IsError/Result to streamEvent must not break
+	// the existing assistant text accumulation path.
+	e := &Executor{}
+	r := &ExecuteResult{}
+	e.parseLine(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello "}]}}`, r)
+	e.parseLine(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}`, r)
+	if r.Text != "hello world" {
+		t.Errorf("Text = %q, want %q", r.Text, "hello world")
+	}
+	if r.IsError {
+		t.Errorf("IsError unexpectedly true")
+	}
+}
+
+func TestShouldAttemptResumeRecovery(t *testing.T) {
+	tests := []struct {
+		name   string
+		req    *ExecuteRequest
+		result *ExecuteResult
+		err    error
+		want   bool
+	}{
+		{
+			name:   "nil request",
+			req:    nil,
+			result: &ExecuteResult{ErrorText: "Invalid `signature` in `thinking` block"},
+			want:   false,
+		},
+		{
+			name:   "no claude session id (fresh context)",
+			req:    &ExecuteRequest{},
+			result: &ExecuteResult{ErrorText: "Invalid `signature` in `thinking` block"},
+			want:   false,
+		},
+		{
+			name:   "signature error in ErrorText, with session id",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: &ExecuteResult{IsError: true, ErrorText: "API Error: 400 messages.5.content.0: Invalid `signature` in `thinking` block"},
+			want:   true,
+		},
+		{
+			name:   "tool_use id error in result.Text",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: &ExecuteResult{Text: "API Error: 400 messages.53.content.2.tool_use.id: String should match pattern"},
+			want:   true,
+		},
+		{
+			name:   "recoverable pattern in returned err",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: nil,
+			err:    errString("claude failed: exit 1 (stderr: Invalid `signature` in `thinking` block)"),
+			want:   true,
+		},
+		{
+			name:   "unrelated 400 — not recoverable",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: &ExecuteResult{IsError: true, ErrorText: "API Error: 400 invalid model"},
+			want:   false,
+		},
+		{
+			name:   "successful result with session id",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: &ExecuteResult{Text: "ok"},
+			want:   false,
+		},
+		{
+			name:   "all nil",
+			req:    &ExecuteRequest{ClaudeSessionID: "abc"},
+			result: nil,
+			err:    nil,
+			want:   false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldAttemptResumeRecovery(tc.req, tc.result, tc.err)
+			if got != tc.want {
+				t.Errorf("shouldAttemptResumeRecovery = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// errString is a tiny error implementation for tests, avoiding fmt.Errorf
+// import drift in this file's existing import set.
+type errString string
+
+func (e errString) Error() string { return string(e) }

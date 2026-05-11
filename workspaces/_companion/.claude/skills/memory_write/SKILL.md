@@ -31,7 +31,7 @@ allowed-tools: Bash, Read, Write, Edit
 
 ```bash
 exec 9>"{workspace_dir}/.memory.lock"
-flock -x 9
+flock -x -w 10 9 || { exec 9>&-; exit 1; }  # 超时10秒则放弃本次写入
 ```
 
 ### Step 1.5：情绪状态写入（写入点 A）
@@ -160,7 +160,7 @@ EVENTS_FILE="$WORKSPACE_DIR/memory/events.md"
 LOCK_FILE="$WORKSPACE_DIR/.memory.lock"
 
 exec 9>"$LOCK_FILE"
-flock -x 9
+flock -x -w 10 9 || { exec 9>&-; exit 1; }
 
 LAST_N=$(grep -oP '(?<=\[E)\d+(?=\])' "$EVENTS_FILE" 2>/dev/null | grep -v '^000$' | sort -n | tail -1)
 NEXT_N=$(printf "%03d" $((${LAST_N:-0} + 1)))

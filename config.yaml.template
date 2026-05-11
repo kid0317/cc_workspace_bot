@@ -17,6 +17,8 @@ apps:
         - "Write"
       # provider: "bailian"        # 覆盖默认供应商（可选）
       # model: "kimi-k2.5"         # 覆盖该供应商的默认模型（可选）
+      # effort: "high"             # 覆盖供应商默认 effort（low/medium/high/xhigh/max）
+                                   # 仅在 anthropic 供应商下生效，其他供应商自动忽略
 
   # - id: "code-review"
   #   feishu_app_id: "cli_yyy"
@@ -44,6 +46,7 @@ claude:
   providers:
     anthropic:                        # Anthropic 原生服务（不需要 base_url 和 auth_token）
       model: "sonnet"                 # 默认模型：别名(sonnet/opus/haiku)或完整ID(claude-sonnet-4-6)
+      # effort: "medium"              # 默认 effort：low/medium/high/xhigh/max（可选，仅 anthropic 支持）
     # bailian:                        # 阿里云百炼平台
     #   base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
     #   auth_token: "sk-your-dashscope-api-key"

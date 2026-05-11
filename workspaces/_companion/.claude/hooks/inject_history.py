@@ -21,7 +21,8 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-RECENT_N = 20  # 最近 N 条消息（user + assistant 各算一条）
+RECENT_N = 50  # 最近 N 条消息（user + assistant 各算一条）
+# 提示：若最老一条是 assistant，会被 drop——否则就是"只看到回复、看不到触发它的 user 消息"的孤儿状态。
 
 
 def parse_timestamp(ts_val) -> str:
@@ -116,11 +117,19 @@ def main():
     if not rows:
         return
 
+    # rows 按 created_at DESC 排；reversed 后是时间升序。
+    # 切掉开头的孤儿 assistant（触发它的 user 被 LIMIT 挤出了窗口）。
+    ordered = list(reversed(rows))
+    while ordered and ordered[0][0] != "user":
+        ordered.pop(0)
+    if not ordered:
+        return
+
     lines = [
         "# 最近对话记录（跨 session）\n",
-        f"> 自动注入，最近 {len(rows)} 条，channel: {channel_key}\n\n",
+        f"> 自动注入，最近 {len(ordered)} 条，channel: {channel_key}\n\n",
     ]
-    for role, content, ts in reversed(rows):
+    for role, content, ts in ordered:
         tag = "**用户**" if role == "user" else "**角色**"
         date_str = parse_timestamp(ts)
         body = content[:500] + ("…" if len(content) > 500 else "")

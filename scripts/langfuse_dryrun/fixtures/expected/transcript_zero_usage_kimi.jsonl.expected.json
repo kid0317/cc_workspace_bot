@@ -1,0 +1,92 @@
+{
+  "distinct_messages": 2,
+  "is_subagent": false,
+  "rows_assistant": 2,
+  "rows_total": 4,
+  "traces": [
+    {
+      "id": "fda40edcc9232da0bcd5001b4aa06f29",
+      "input": "问个问题",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 1",
+      "observations": [
+        {
+          "id": "1ad290e10cf67a7d97b78c4a7606173e",
+          "input_preview": "问个问题",
+          "message_id": "msg_kimi_001",
+          "model": "kimi-k2.5",
+          "name": "kimi-k2.5",
+          "output_text": "这是回答内容 with some english mixed",
+          "request_id": "req_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 4,
+            "output": 12
+          },
+          "usage_source": "estimated_char"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    },
+    {
+      "id": "0dda355775dfd9183ab598da418b3ec3",
+      "input": "output 0 only",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 2",
+      "observations": [
+        {
+          "id": "6adaf12814c6c7e37117769f470c1b82",
+          "input_preview": "output 0 only",
+          "message_id": "msg_kimi_002",
+          "model": "kimi-k2.5",
+          "name": "kimi-k2.5",
+          "output_text": "some output",
+          "request_id": "req_002",
+          "started_at": "2026-05-06T10:00:01.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 100,
+            "output": 0
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 2,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "transcript_zero_usage_kimi.jsonl",
+  "turns_emitted": 2
+}

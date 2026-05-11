@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"os"
@@ -16,6 +18,16 @@ import (
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
 
+// parseErrKey dedupes parse-error log lines. Keyed on (path, content hash, msg)
+// so that an identical error on the same file content is logged once, but a
+// content change (even one that preserves mtime, e.g. via `touch -r`) or a
+// different error class produces a new log line.
+type parseErrKey struct {
+	path        string
+	contentHash string
+	msg         string
+}
+
 // Watcher monitors the tasks/ directory of each workspace and syncs YAML files to DB.
 type Watcher struct {
 	scheduler *Scheduler
@@ -23,6 +35,9 @@ type Watcher struct {
 	watcher   *fsnotify.Watcher
 	mu        sync.RWMutex
 	dirAppIDs map[string]string // watched dir path → workspace appID
+
+	errMu    sync.Mutex
+	errCache map[parseErrKey]struct{}
 }
 
 // NewWatcher creates a Watcher. The caller must call Start before AddDir,
@@ -37,7 +52,68 @@ func NewWatcher(scheduler *Scheduler, db *gorm.DB) (*Watcher, error) {
 		db:        db,
 		watcher:   fw,
 		dirAppIDs: make(map[string]string),
+		errCache:  make(map[parseErrKey]struct{}),
 	}, nil
+}
+
+// maxErrCacheEntries caps errCache size so a high-churn tasks/ directory
+// (rapid create+delete with distinct content hashes) cannot exhaust memory
+// between 2-minute prune cycles. At ~200 B per key, 1000 entries is ~200 KiB —
+// orders of magnitude below any realistic operational footprint, and the cap
+// only trips in pathological / adversarial scenarios where we'd rather lose a
+// log line than the process.
+const maxErrCacheEntries = 1000
+
+// shouldLogParseErr returns true when (path, contentHash, msg) has not been
+// logged before, and records the key. Keeps repeated scans from spamming the
+// log with the same error — but a file change or a new error class breaks
+// through immediately. Returns false (silently drops the log line) when the
+// cache is saturated; the saturation itself is logged once per rescan.
+func (w *Watcher) shouldLogParseErr(key parseErrKey) bool {
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	if _, ok := w.errCache[key]; ok {
+		return false
+	}
+	if len(w.errCache) >= maxErrCacheEntries {
+		return false
+	}
+	w.errCache[key] = struct{}{}
+	return true
+}
+
+// forgetPath drops every cached error entry for a given path. Called when a
+// file parses cleanly or is removed, so subsequent real errors on the same
+// path are not suppressed by a stale cache entry, and so the cache shrinks
+// at the same pace YAML files stabilise — not only on the 2-minute ticker.
+func (w *Watcher) forgetPath(path string) {
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	for k := range w.errCache {
+		if k.path == path {
+			delete(w.errCache, k)
+		}
+	}
+}
+
+// pruneErrCache removes entries whose path is not in keepPaths. Called at the
+// end of rescanAll so the cache size stays bounded as YAML files come and go.
+func (w *Watcher) pruneErrCache(keepPaths map[string]struct{}) {
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	for k := range w.errCache {
+		if _, ok := keepPaths[k.path]; !ok {
+			delete(w.errCache, k)
+		}
+	}
+}
+
+// hashContent returns a short hex prefix of the SHA-256 of data. 16 chars is
+// well beyond the collision risk for per-file dedup — the domain is "same file
+// vs. modified file", not cryptographic.
+func hashContent(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
 }
 
 // Close releases the underlying fsnotify file descriptor.
@@ -113,6 +189,7 @@ func (w *Watcher) rescanAll(ctx context.Context) {
 		watched[p] = struct{}{}
 	}
 
+	seenPaths := make(map[string]struct{})
 	for dir, appID := range dirs {
 		if _, ok := watched[dir]; !ok {
 			// Directory is no longer watched (deleted+recreated or inotify limit).
@@ -128,14 +205,18 @@ func (w *Watcher) rescanAll(ctx context.Context) {
 			slog.Warn("task watcher: re-established lost watch", "dir", dir, "app", appID)
 		}
 		// Sync all YAML files currently on disk for this directory.
-		w.syncDir(ctx, dir, appID)
+		w.syncDir(ctx, dir, appID, seenPaths)
 	}
+	// Drop cache entries for files that no longer exist anywhere so the map
+	// stays bounded even if YAML files are churned over time.
+	w.pruneErrCache(seenPaths)
 }
 
 // syncDir loads every YAML file in dir and upserts it into the scheduler.
 // Used both during rescan and on startup to catch files written while the
-// watch was not yet active.
-func (w *Watcher) syncDir(ctx context.Context, dir, appID string) {
+// watch was not yet active. seenPaths, if non-nil, is populated with every
+// path visited (valid or invalid) so rescanAll can prune stale cache entries.
+func (w *Watcher) syncDir(ctx context.Context, dir, appID string, seenPaths map[string]struct{}) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -148,13 +229,75 @@ func (w *Watcher) syncDir(ctx context.Context, dir, appID string) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		task, err := LoadYAML(path, appID)
-		if err != nil {
-			slog.Error("task watcher: sync dir parse yaml", "file", path, "err", err)
+		if seenPaths != nil {
+			seenPaths[path] = struct{}{}
+		}
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			key := parseErrKey{path: path, contentHash: "", msg: readErr.Error()}
+			if w.shouldLogParseErr(key) {
+				slog.Error("task watcher: sync dir read", "file", path, "err", readErr)
+			}
 			continue
 		}
+		task, err := LoadYAMLFromBytes(data, path, appID)
+		if err != nil {
+			key := parseErrKey{path: path, contentHash: hashContent(data), msg: err.Error()}
+			if w.shouldLogParseErr(key) {
+				slog.Error("task watcher: sync dir parse yaml", "file", path, "err", err)
+			}
+			continue
+		}
+		// Parse succeeded — drop any stale error entries so a later regression
+		// on this path is not silently deduped against an earlier error.
+		w.forgetPath(path)
 		w.upsertTask(ctx, task)
 	}
+}
+
+// ListYAMLs scans every registered tasks/ directory and returns the parse
+// outcome for each YAML file. Intended for startup summaries and CLI tools
+// (cmd/dbcheck) — it intentionally bypasses the log dedup cache so every call
+// produces a complete, fresh report.
+type YAMLParseResult struct {
+	AppID string
+	Path  string
+	Task  *model.Task // nil when Err != nil
+	Err   error
+}
+
+// ListYAMLs returns the parse result for every YAML file under the watcher's
+// registered task directories. Does not mutate DB or scheduler state.
+func (w *Watcher) ListYAMLs() []YAMLParseResult {
+	w.mu.RLock()
+	dirs := make(map[string]string, len(w.dirAppIDs))
+	for dir, appID := range w.dirAppIDs {
+		dirs[dir] = appID
+	}
+	w.mu.RUnlock()
+
+	var results []YAMLParseResult
+	for dir, appID := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				results = append(results, YAMLParseResult{AppID: appID, Path: path, Err: readErr})
+				continue
+			}
+			t, err := LoadYAMLFromBytes(data, path, appID)
+			results = append(results, YAMLParseResult{AppID: appID, Path: path, Task: t, Err: err})
+		}
+	}
+	return results
 }
 
 func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
@@ -169,11 +312,26 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 
 	switch {
 	case event.Op&(fsnotify.Create|fsnotify.Write) != 0:
-		task, err := LoadYAML(event.Name, appID)
-		if err != nil {
-			slog.Error("task watcher: parse yaml", "err", err, "file", event.Name)
+		data, readErr := os.ReadFile(event.Name)
+		if readErr != nil {
+			key := parseErrKey{path: event.Name, contentHash: "", msg: readErr.Error()}
+			if w.shouldLogParseErr(key) {
+				slog.Error("task watcher: read yaml", "err", readErr, "file", event.Name)
+			}
 			return
 		}
+		task, err := LoadYAMLFromBytes(data, event.Name, appID)
+		if err != nil {
+			key := parseErrKey{path: event.Name, contentHash: hashContent(data), msg: err.Error()}
+			if w.shouldLogParseErr(key) {
+				slog.Error("task watcher: parse yaml", "err", err, "file", event.Name)
+			}
+			return
+		}
+		// Success path: drop any prior error entries for this file so (a) the
+		// cache shrinks as files stabilise, and (b) a new regression on the
+		// same path is not suppressed by a stale hash match.
+		w.forgetPath(event.Name)
 		w.upsertTask(ctx, task)
 
 	case event.Op&fsnotify.Remove != 0:
@@ -183,6 +341,7 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 		}
 		base := strings.TrimSuffix(filepath.Base(event.Name), ".yaml")
 		w.removeTask(appID + "/" + base)
+		w.forgetPath(event.Name)
 
 	case event.Op&fsnotify.Rename != 0:
 		if appID == "" {
@@ -191,6 +350,7 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 		}
 		base := strings.TrimSuffix(filepath.Base(event.Name), ".yaml")
 		w.removeTask(appID + "/" + base)
+		w.forgetPath(event.Name)
 	}
 }
 

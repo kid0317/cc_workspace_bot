@@ -79,14 +79,17 @@ def get_lark_cli_target_flags(routing_key: str) -> list:
     return ["--chat-id", receive_id]
 
 
-def run_lark_cli(args: list) -> dict:
+def run_lark_cli(args: list, cwd: str | None = None) -> dict:
     """执行 lark-cli 命令，返回 data 字段。失败时 output_error 退出。
 
     lark-cli 成功时：stdout 为干净 JSON {"ok": true, "identity": "bot", "data": {...}}
     lark-cli 失败时：exit code 2，stderr 为 JSON {"ok": false, "error": {...}}
+
+    cwd：工作目录。lark-cli 的 @file 语法要求文件是 cwd 内的相对路径，
+         上传本地文件时传入文件所在目录即可。
     """
     cmd = get_lark_cli_base_cmd() + args
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
 
     if result.returncode != 0:
         try:
@@ -119,7 +122,10 @@ def parse_routing_key(routing_key: str) -> tuple:
     - oc_xxx       → ("chat_id", "oc_xxx")
     """
     if routing_key.startswith("p2p:"):
-        return "open_id", routing_key[4:]
+        receive_id = routing_key[4:]
+        if receive_id.startswith("oc_"):
+            return "chat_id", receive_id
+        return "open_id", receive_id
     if routing_key.startswith("group:"):
         return "chat_id", routing_key[6:]
     if routing_key.startswith("ou_"):

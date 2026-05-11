@@ -1,0 +1,4 @@
+{"type":"user","uuid":"u-user-1","message":{"role":"user","content":"问个问题"}}
+{"type":"assistant","uuid":"u-asst-1","requestId":"req_001","timestamp":"2026-05-06T10:00:00.000Z","message":{"id":"msg_kimi_001","model":"kimi-k2.5","content":[{"type":"text","text":"这是回答内容 with some english mixed"}],"usage":{"input_tokens":0,"output_tokens":0}}}
+{"type":"user","uuid":"u-user-2","message":{"role":"user","content":"output 0 only"}}
+{"type":"assistant","uuid":"u-asst-2","requestId":"req_002","timestamp":"2026-05-06T10:00:01.000Z","message":{"id":"msg_kimi_002","model":"kimi-k2.5","content":[{"type":"text","text":"some output"}],"usage":{"input_tokens":100,"output_tokens":0}}}

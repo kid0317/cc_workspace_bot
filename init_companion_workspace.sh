@@ -195,10 +195,11 @@ if [[ -d "$TEMPLATE_FEISHU_SCRIPTS" ]]; then
         rel="${src#$TEMPLATE_FEISHU_SCRIPTS/}"
         dst="$DST_FEISHU_SCRIPTS/$rel"
         if [[ ! -f "$dst" ]]; then
+            mkdir -p "$(dirname "$dst")"
             cp "$src" "$dst"
             FCOPIED=$((FCOPIED + 1))
         fi
-    done < <(find "$TEMPLATE_FEISHU_SCRIPTS" -type f -print0)
+    done < <(find "$TEMPLATE_FEISHU_SCRIPTS" -type f -not -path '*/__pycache__/*' -print0)
     info "feishu_ops scripts：复制 ${FCOPIED} 个"
     # 同步 SKILL.md（feishu_ops 技能描述文件）
     TEMPLATE_SKILL_MD="$TEMPLATE_FEISHU_DIR/SKILL.md"
@@ -282,6 +283,40 @@ print("config.yaml 已更新")
 PYEOF
 
 info "已追加 companion app '${APP_ID}' 到 config.yaml"
+
+# ── v5.1 写入 .template_version ────────────────────────────────────────────────
+step "写入 .template_version"
+
+TEMPLATE_VERSION_FILE="$TEMPLATE_DIR/VERSION"
+if [[ -f "$TEMPLATE_VERSION_FILE" ]]; then
+    TEMPLATE_VER=$(cat "$TEMPLATE_VERSION_FILE" | tr -d '[:space:]')
+    echo "$TEMPLATE_VER" > "$WORKSPACE_DIR/.template_version"
+    info "已记录模板版本: $TEMPLATE_VER"
+else
+    warn "$TEMPLATE_VERSION_FILE 不存在，跳过版本记录"
+fi
+
+# ── v5.1 calibrate_templates + 冷启动种子 ─────────────────────────────────────
+step "生成 keyword_templates.yaml（仅 persona 存在时）"
+
+CALIBRATE_SCRIPT="$TEMPLATE_DIR/.claude/skills/calibrate_params/calibrate_templates.py"
+PERSONA_PATH="$WORKSPACE_DIR/memory/persona.md"
+
+if [[ -f "$PERSONA_PATH" ]] && [[ -s "$PERSONA_PATH" ]] && [[ -f "$CALIBRATE_SCRIPT" ]]; then
+    python3 "$CALIBRATE_SCRIPT" "$WORKSPACE_DIR" 2>&1 | sed 's/^/  /' || true
+    info "keyword_templates.yaml 已生成"
+else
+    warn "persona.md 不存在或为空，跳过 keyword_templates.yaml 生成（phase1_done 后将由 recalculate.sh 自动触发）"
+fi
+
+step "冷启动种子 life_log"
+echo "  新角色前 24h 无 life_log 会让用户感觉'没灵魂'。v5.1 支持在 done 阶段自动生成 stub。"
+echo ""
+echo "  建议：初始化对话走到 done 后，手动触发一次："
+echo "    cd $WORKSPACE_DIR && claude -p '加载 .claude/skills/life_sim/SKILL.md'"
+echo ""
+echo "  或首次 life_sim cron 触发时（每 4 小时），骰子通过后会自动生成。"
+echo "  （注：由于 cron 骰子带概率，建议手动触发一次以确保前 24h 可见）"
 
 # ── 完成摘要 ──────────────────────────────────────────────────────────────────
 echo ""

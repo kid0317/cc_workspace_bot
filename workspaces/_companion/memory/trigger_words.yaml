@@ -1,0 +1,39 @@
+# trigger_words.yaml · FORCE_LISTEN / SOFT_CARE 触发词（v2.2）
+# 由 reply_checklist.sh 在 PROCESSING/CLOSING 检测阶段读取
+# v2.2 变化：require_cooccurrence 改为 AND 共现；explicit_crisis 加否定前词排除
+
+force_listen:
+  # 必须两类 AND 共现才触发（防"我妈做了红烧肉"误伤）
+  require_cooccurrence:
+    - group_a: [爸, 妈, 爷爷, 奶奶, 外公, 外婆, 哥, 姐, 伴侣, 对象, 老公, 老婆, 父亲, 母亲, 亲人]
+      group_b: [去世, 走了, 过世, 没了, 不在了, 一年了, 两年了, 一年多, 两年多, 一年前, 扫墓, 陵园, 追悼, 告别, 离开了]
+    - group_a: [我, 自己, 家人]
+      group_b: [医院, 住院, 病了, 确诊, 化疗, 手术, 癌症]
+    - group_a: [分手, 离婚, 吵架, 闹翻, 冷战]
+      group_b: []   # 空 group_b 表示该词单独命中即可
+
+  # 显性危机词（含否定前词排除，防"笑崩了"类误伤）
+  explicit_crisis:
+    words: [崩了, 哭了, 受不了, 绝望, 想死, 撑不住, 压力好大到]
+    # 前 3 字窗口出现以下字则不命中
+    negate_if_preceded_by: [笑, 甜, 美, 好, 乐, 爱, 帅, 哈, 太, 真]
+    window: 3
+
+# SOFT_CARE：不追问但可轻轻分享
+soft_care:
+  single_hit: [之前懒, 没事, 还行, 就那样, 习惯了, 不想说, 算了, 都行]
+
+# 冷却轮数
+cooldown:
+  force_listen: 2    # 命中后下 2 轮也 LISTEN + 禁问
+  soft_care: 1       # 下 1 轮不发起新话题但可分享
+
+# FORCE_LISTEN 命中后第一句的候选
+first_sentence_options_when_force_listen:
+  - "嗯。"
+  - "在。"
+  - "……"
+
+# CLOSING 触发词（维持 v1 行为）
+closing:
+  single_hit: [晚安, 拜拜, bye, 去睡了, 先去忙了, 改天聊, 有事走了]

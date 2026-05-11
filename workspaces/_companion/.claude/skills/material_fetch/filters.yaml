@@ -1,0 +1,82 @@
+# 素材硬筛规则（按能力位图路由）
+#
+# 本文件被 material_fetch Step 3.5 读取，在 LLM 二审前执行 bash/regex 级别的 hard reject。
+# 能力查询用 workspace 的 memory/keyword_templates.yaml#capabilities 字段。
+#
+_schema: 1
+
+# ─── 硬 reject 规则（满足任一即丢弃）───
+hard_reject:
+  # 按能力位图条件路由
+  by_capability:
+    - when: "!in_human_society"
+      reject_contains: [上班, 开会, 通勤, 加班, KPI, 领导, 房贷, 房租, 社畜, 打工, 老板]
+      note: "非人类社会角色不消费职场素材"
+
+    - when: "!can_use_phone"
+      reject_contains_in_trigger: [刷到, 浏览, 点赞, 转发, 推送, 收到微信, 朋友圈]
+      note: "作用于转译阶段的触发动词白名单（实际在 life_sim Step 7 生效）"
+
+    - when: "has_career && stability_gte: 4"
+      reject_valence_gt: 0.85
+      reject_valence_lt: -0.75
+      note: "高稳定职业角色不采用情绪极值素材"
+
+    - when: "!has_romantic_partner"
+      reject_contains: [老公, 老婆, 前任, 分手, 出轨]
+      note: "无伴侣角色不消费情感关系素材"
+
+    - when: "!has_family"
+      reject_contains: [公婆, 婆媳, 育儿, 娃, 老公做饭]
+      note: "无家庭角色不消费家庭素材"
+
+  # 全角色通用
+  always:
+    reject_contains: [求私信, 进群, 加v, 代购, MCN, 带货, 饭圈, 刷单, 抽奖]
+    reject_polarized: [政党, 女权, 男拳, 民主自由议题]
+    reject_length_gt: 1500
+    reject_length_lt: 30
+    reject_emoji_density_gt: 0.15
+    reject_repeated_punctuation_gt: 5
+
+# ─── 触发动词配额（在 life_sim Step 7 强制）───
+# 每 7 日内，同一触发动词在 life_log 中出现次数上限
+trigger_verb_quota:
+  梦见: 2
+  想起: 3
+  刷到: 5
+  听见: 10
+  看见: 10
+  闻到: 10
+
+# ─── LLM 二审 prompt 模板（锁外执行，见 material_fetch Step 5）───
+llm_review_prompt: |
+  你是角色 {persona_name} 的作者。请判断以下素材能否被改写为这个角色会自然经历的生活片段。
+
+  角色核心设定：{persona_summary}
+  角色能力位图：{capabilities}
+  最近 3 条 life_log（避免雷同主题）：
+  {recent_life_log}
+
+  素材原文：
+  ---
+  {material_text}
+  ---
+
+  输出严格 JSON：
+  {
+    "fit_score": 0.0-1.0,
+    "reason": "不超过 30 字",
+    "suggested_form": "多形态角色建议的形态名，或 null",
+    "suggested_verb": "看见|听见|闻到|想起|梦见|刷到|收到消息",
+    "valence": -1.0-1.0,
+    "energy": 0.0-1.0
+  }
+
+  评分标准：
+    - 跳戏（年龄/性别/职业/价值观不符）→ 0.0-0.3
+    - 勉强可平移（情绪/情境错配需大幅改造）→ 0.3-0.6
+    - 自然可平移（只需转译语气与感官）→ 0.6-0.85
+    - 高度契合（与最近挂念/persona 锚点呼应）→ 0.85-1.0
+
+  fit_score < 0.6 的素材将被丢弃，请保守打分。

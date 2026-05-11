@@ -2,7 +2,7 @@
 name: feishu_ops
 description: "飞书操作：向用户/群组发送消息（文字/富文本/图片/文件）、读写云文档/电子表格/多维表格、查询群成员、管理日历事件。适合推送通知、发送处理结果文件、读取共享文档、批量发送报告等场景。"
 type: task
-version: "3.0"
+version: "3.1"
 metadata:
   requires:
     bins: ["lark-cli", "python3"]
@@ -85,12 +85,20 @@ python {_skill_base}/scripts/send_file.py \
 
 ## 二、读取飞书云文档
 
-### read_doc.py — 读取飞书文档内容
+### read_doc.py — 读取飞书文档内容（带本地缓存）
 
 ```
 python {_skill_base}/scripts/read_doc.py \
-    --doc "https://xxx.feishu.cn/docx/doccnXXXXXX"
+    --doc "https://xxx.feishu.cn/docx/doccnXXXXXX" [--no-cache] [--verify-remote]
 ```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--doc` | ✅ | 飞书文档 URL 或 doc_token |
+| `--no-cache` | 否 | 跳过本地缓存，强制远程拉取 |
+| `--verify-remote` | 否 | 命中本地后顺手校验远程 revision 是否变化（变化只 warning，仍返回本地快照） |
+
+**缓存逻辑**：若该飞书文档由本工作区通过 `create_doc.py` 上传过，且本地源 md 文件仍存在、内容未变，则直接读本地文件返回（`data.source == "local_cache"`），不再下载。否则走远程（`data.source == "remote"`）。
 
 ### read_sheet.py — 读取飞书电子表格数据
 
@@ -139,12 +147,32 @@ python {_skill_base}/scripts/create_event.py \
 
 ## 五、创建文档 / 表格
 
-### create_doc.py — 创建飞书文档（支持 Markdown 内容）
+### create_doc.py — 把本地 Markdown 文件上传为飞书文档（带去重缓存）
+
+> ⚠️ **只接受本地 `.md` 文件路径**。`--content` / `--content_file` 已废弃，传了会报 `errcode: 2`。
+> 上传前若同内容（按 sha256）已上传过，直接复用旧链接（`data.cached == true`），不重复上传。
 
 ```
 python {_skill_base}/scripts/create_doc.py \
-    --title "季度报告" \
-    --content "# 一季度\n\n正文内容..."
+    --file_path /root/course/ai-pm/前期沟通/前期沟通报告_20260510.md \
+    --title "AI PM 前期沟通报告" [--folder_token <token>] [--no-cache]
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--file_path` | ✅ | 本地 `.md` 文件绝对路径，**必须在工作区 `/root/course` 内**，≤10MB |
+| `--title` | 否 | 文档标题（默认取文件名去后缀） |
+| `--folder_token` | 否 | 目标飞书文件夹 token（留空放根目录） |
+| `--no-cache` | 否 | 跳过缓存命中，强制重新上传 |
+
+返回 `data`：`{url, document_id, cached(bool), sha256, record_id}`。
+
+> **上传前要先生成/保存 md 文件时**：见下方「八、文件存放规范」——优先放到项目内合适位置，没有归属时才放 `/root/course/tmp_file/`，禁止放 `/tmp`、CWD、skill 目录内。
+
+### dump_index.py — 查看上传索引
+
+```
+python {_skill_base}/scripts/dump_index.py [--status active|deleted|remote_missing|all]
 ```
 
 ### create_sheet.py — 创建电子表格
@@ -196,6 +224,29 @@ python {_skill_base}/scripts/write_bitable_records.py \
     --table_id tblXXXXXX \
     --records '[{"任务名称":"完成API文档","优先级":"高"}]'
 ```
+
+---
+
+## 七、文件存放规范（上传飞书文档前必读）
+
+调用 `create_doc.py` 前若需要先生成或保存 `.md` 文件，存放位置遵循以下优先级：
+
+1. **项目内合适位置**（首选）：md 文档若属于工作产物（课程稿、报告、设计文档），放到对应业务目录：
+   `ai-pm/`、`multi-agent/`、`企业培训/<客户>/`、`.claude/skills/<skill>/docs/` 等。
+2. **`/root/course/tmp_file/`**（次选）：纯过渡性、无明确归属的 md，放这里（可建子目录）。
+3. **禁止**放到 `/tmp`、`/var/tmp`、当前工作目录（CWD）、skill 目录根目录或 `scripts/` 下。
+
+`create_doc.py` 会拒绝工作区（`/root/course`）之外的文件路径，并提示重新放置。
+
+---
+
+## 八、文档缓存与索引（内部机制）
+
+- 索引库：`{_skill_base}/index/doc_cache.db`（SQLite，自动创建）。
+- 记录每次上传的 `(sha256, 飞书 doc_token/url, 本地源路径, 标题, ...)` 映射。
+- `create_doc.py` 上传前查 sha256；`read_doc.py` 读取前查 doc_token。命中即走本地，省去重复上传/下载。
+- 索引写入失败不会让上传失败（上传是不可逆操作，索引只是优化层）。
+- 用 `dump_index.py` 查看，无需手工编辑 db 文件。
 
 ---
 

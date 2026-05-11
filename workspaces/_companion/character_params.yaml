@@ -18,6 +18,36 @@ conversation:
   max_questions_per_session: 8
 
 life_sim:
+  # v3 基线
   gen_threshold_day: 40
   gen_threshold_night: 16
   log_max_length: 220
+
+  # v5.1 新增
+  emotional_range: 3              # 1=极冷 / 5=高波动；控制降温系数档位
+  material_use_threshold: 60      # pool 有素材时的使用概率（原 G4 的 60%）
+  original_quote_max_chars: 15    # 触发段复述原帖上限字符数
+  white_space_prob: 25            # 留白模式概率（保留 v3 "天花板很白" 式极简美学）
+  user_echo_priority: 1.5         # user_told 挂念在挑选时的权重倍数
+  seed_count: 5                   # 初始化时冷启动 stub life_log 数量
+  preserve_peak_if_stability_ge: 4   # stability ≥ 4 时，|v_原| > 0.8 保留 70% 峰值
+  voice_token_valence_exempt: true   # persona.voice_tokens 中的词豁免情绪峰值硬规则
+
+# ── v2.2 配置层 · 可用户调参 ──
+shape_constraints:
+  paragraph_count: [1, 1, 2, 2_short, 3_short]
+  opener_type: [action, emotion_reflect, direct_speech, ambient_detail, inner_monologue, pure_silence]
+  question_policy: [none, none, A_level_1, B_level_1]
+
+tone_adverbs:
+  pool_name: auto  # auto = 按 persona 维度复合选
+  custom_pool: []
+
+silent_cot:
+  prob: 20
+  force_disable_when: [force_listen_hit, soft_care_hit]
+
+relationship_heat:
+  warming_threshold: 50
+  familiar_threshold: 200
+  intimate_threshold: 500

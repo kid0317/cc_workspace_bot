@@ -21,12 +21,12 @@ type Config struct {
 
 // AppConfig represents one Feishu application + its workspace.
 type AppConfig struct {
-	ID                      string          `mapstructure:"id"`
-	FeishuAppID             string          `mapstructure:"feishu_app_id"`
-	FeishuAppSecret         string          `mapstructure:"feishu_app_secret"`
-	FeishuVerificationToken string          `mapstructure:"feishu_verification_token"`
-	FeishuEncryptKey        string          `mapstructure:"feishu_encrypt_key"`
-	WorkspaceDir            string          `mapstructure:"workspace_dir"`
+	ID                      string `mapstructure:"id"`
+	FeishuAppID             string `mapstructure:"feishu_app_id"`
+	FeishuAppSecret         string `mapstructure:"feishu_app_secret"`
+	FeishuVerificationToken string `mapstructure:"feishu_verification_token"`
+	FeishuEncryptKey        string `mapstructure:"feishu_encrypt_key"`
+	WorkspaceDir            string `mapstructure:"workspace_dir"`
 	// WorkspaceMode controls the reply UI behaviour.
 	// "work" (default): sends an interactive card first ("thinking…"), then
 	//   patches it with the final response — good for task-oriented bots.
@@ -67,6 +67,12 @@ type AppClaudeConfig struct {
 	// or third-party model names (qwen-plus, kimi-k2.5).
 	// Empty means use the provider's configured default model.
 	Model string `mapstructure:"model"`
+	// Effort overrides the provider's default effort for this app.
+	// Passed to claude CLI as --effort. Typical values: low, medium, high,
+	// xhigh, max. Empty means use the provider's configured effort.
+	// Only honored when the effective provider is anthropic; other providers
+	// may not support the flag and it is silently dropped.
+	Effort string `mapstructure:"effort"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -96,6 +102,10 @@ type ProviderConfig struct {
 	// Model is the default model for this provider.
 	// Accepts aliases (sonnet, opus, haiku), full IDs, or third-party names.
 	Model string `mapstructure:"model"`
+	// Effort is the default effort level for this provider.
+	// Passed to claude CLI as --effort when the provider is anthropic.
+	// Typical values: low, medium, high, xhigh, max. Empty means no flag.
+	Effort string `mapstructure:"effort"`
 }
 
 // SessionConfig holds session worker settings.

@@ -70,14 +70,14 @@ func TestExtractPostText(t *testing.T) {
 			want:    "not-json",
 		},
 		{
-			name: "no title",
+			name:    "no title",
 			content: `{"content":[[{"tag":"text","text":"hello"}]]}`,
-			want: "hello",
+			want:    "hello",
 		},
 		{
-			name: "non-text tags are ignored",
+			name:    "non-text tags are ignored",
 			content: `{"content":[[{"tag":"image","image_key":"k1"},{"tag":"text","text":"ok"}]]}`,
-			want: "ok",
+			want:    "ok",
 		},
 	}
 	for _, tt := range tests {

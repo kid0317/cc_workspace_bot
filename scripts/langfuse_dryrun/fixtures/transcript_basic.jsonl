@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u-user-1","message":{"role":"user","content":"hello"}}
+{"type":"assistant","uuid":"u-asst-1","requestId":"req_001","timestamp":"2026-05-06T10:00:00.000Z","message":{"id":"msg_basic_001","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi there"}],"usage":{"input_tokens":10,"output_tokens":5}}}

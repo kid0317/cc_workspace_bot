@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/kid0317/cc-workspace-bot/internal/claude"
 	"github.com/kid0317/cc-workspace-bot/internal/config"
 	"github.com/kid0317/cc-workspace-bot/internal/feishu"
+	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
 
 // Manager maps channel keys to their Workers and lazily starts them.
@@ -74,6 +76,33 @@ func (m *Manager) Dispatch(ctx context.Context, msg *feishu.IncomingMessage) err
 // Call this after cancelling the context to achieve a clean shutdown.
 func (m *Manager) Wait() {
 	m.wg.Wait()
+}
+
+// ArchiveChannel marks the active session for channelKey as archived.
+// Called by the task subsystem after a borrow-channel task with
+// post_archive=true completes successfully — this is the "external /new"
+// mechanism that lets the companion workspace rotate sessions at 04:00
+// without requiring a user message.
+//
+// Thread safety: Worker does not cache session state. Every process() call
+// re-queries the DB via getOrCreateSession, which filters by status='active'.
+// So an outside UPDATE is immediately observed by the next user message.
+// No worker stop / queue drain is needed.
+//
+// Idempotent: UPDATE with status='active' filter is a no-op if already archived.
+func (m *Manager) ArchiveChannel(channelKey string) error {
+	res := m.db.Model(&model.Session{}).
+		Where("channel_key = ? AND status = ?", channelKey, statusActive).
+		Updates(map[string]any{
+			"status":     statusArchived,
+			"updated_at": time.Now(),
+		})
+	if res.Error != nil {
+		return fmt.Errorf("archive channel %s: %w", channelKey, res.Error)
+	}
+	slog.Info("session: archived by task",
+		"channel", channelKey, "rows", res.RowsAffected)
+	return nil
 }
 
 // getOrCreateWorker returns the existing Worker or starts a new one.

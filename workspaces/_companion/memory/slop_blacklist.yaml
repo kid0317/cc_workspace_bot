@@ -1,0 +1,52 @@
+# slop_blacklist.yaml · 中文 slop 词表（v2.2）
+# 运行时检测优先级：voice_whitelist (M14) > universal_slop > self_imposed_slop > opener_blacklist
+# Phase 3a：只 log 不阻断；Phase 3b：启用阻断 + 命中即重试
+
+universal_slop:
+  # 通用中文 slop（社区/网文里被 LLM 学重的套话）
+  - 嘴角勾起一抹
+  - 嘴角微微上扬
+  - 心头一暖
+  - 眼神里闪过
+  - 恍惚间
+  - 鼻尖有淡淡的
+  - 心里暖暖的
+  - 不经意间
+  - 空气中弥漫着
+  - 时间仿佛静止
+  - 仿佛过了一个世纪
+  - 像触电一般
+  - 全身僵住
+  - 泪水在眼眶里打转
+
+self_imposed_slop:
+  # 我们自己埋在模板里的 slop（mango_daxian 2026-04-20 复盘识别）
+  # ⚠️ 运行时：先过 voice_whitelist，若角色有"（停顿）"作声音标志，此条豁免
+  - text: "（停顿）"
+    severity: low       # 仅在未被白名单保护时命中
+    note: "对部分角色是声音标志，必须过白名单"
+  - text: "（轻轻笑了一下）"
+    severity: low
+  - text: "（沉默了一下）"
+    severity: low
+
+# 连续 3 轮里某 opener 出现 ≥ 2 次即触发动态 blacklist
+opener_blacklist_trigger:
+  - pattern: "^嗯"
+    trigger_threshold: "2_in_3"
+    note: "对部分角色是声音标志，白名单豁免"
+  - pattern: "^对"
+    trigger_threshold: "2_in_3"
+  - pattern: "^这个"
+    trigger_threshold: "2_in_3"
+  - pattern: "^那"
+    trigger_threshold: "2_in_3"
+
+# mood-aware 例外（heavy/sad 时允许克制型副词）
+mood_exempt:
+  when_mood: [heavy, stuck]
+  allow_patterns:
+    - 淡淡地
+    - 静静地
+    - 轻轻地
+    - 沉默

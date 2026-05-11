@@ -118,7 +118,11 @@ RAND=$((RANDOM % 100))
 if [[ $RAND -ge $SEND_PROB ]] && [[ ${SKIP_COUNT:-0} -lt $MAX_SKIP ]]; then
     NEW_COUNT=$((${SKIP_COUNT:-0} + 1))
     PREV_SENT_TS=$(grep '^last_sent_ts:' "$PROACTIVE_STATE" 2>/dev/null | awk '{print $2}')
-    { echo "skip_count: $NEW_COUNT"; [[ -n "$PREV_SENT_TS" ]] && echo "last_sent_ts: $PREV_SENT_TS"; } > "$PROACTIVE_STATE"
+    PREV_LKR=$(grep '^last_knowledge_ref_at:' "$PROACTIVE_STATE" 2>/dev/null | awk '{print $2}')
+    { echo "skip_count: $NEW_COUNT"
+      [[ -n "$PREV_SENT_TS" ]] && echo "last_sent_ts: $PREV_SENT_TS"
+      [[ -n "$PREV_LKR" ]] && echo "last_knowledge_ref_at: $PREV_LKR"
+    } > "$PROACTIVE_STATE"
     exit 0
 fi
 # 到达这里：本次将发送（skip_count 在 Step 5 发送成功后重置为 0）
@@ -149,6 +153,73 @@ PROFILE_CONTENT=$(cat "$PROFILE_FILE" 2>/dev/null || echo "")
 | P4-C | knowledge_bank.md 有 formed + 最后使用:从未（ready） + valence > -0.2 + 距上次知识引用 > 3 轮 + openness ≥ 3 | 以角色口吻自然分享一个已形成的知识点 |
 | P4-A | 无以上情况，life_log.md 有最近条目 | 以 life_log 最新内容为素材，自然带出 |
 | P4-B | P4-A 不可用（life_log 为空或被锁定） | 与当前时间/心情相关的随机句子 |
+
+**P4-C 执行流程**（在 P1/P2/P3 均不满足后，检查此条）：
+
+```bash
+KNOWLEDGE_BANK="$WORKSPACE_DIR/memory/knowledge_bank.md"
+PERSONA_FILE="$WORKSPACE_DIR/memory/persona.md"
+MOOD_STATE="$WORKSPACE_DIR/memory/mood_state.md"
+
+# 读取 openness（从 persona.md，single-form: personality_dims.openness）
+OPENNESS=$(python3 -c "
+import re
+try:
+    c = open('$PERSONA_FILE').read()
+    m = re.search(r'openness:\s*(\d+)', c)
+    print(int(m.group(1)) if m else 3)
+except: print(3)
+" 2>/dev/null)
+OPENNESS=${OPENNESS:-3}
+
+# 读取当前 valence
+CURRENT_VALENCE=$(grep -m1 '^valence:' "$MOOD_STATE" 2>/dev/null | awk '{print $2}')
+CURRENT_VALENCE=${CURRENT_VALENCE:-0.0}
+
+# 读取 last_knowledge_ref_at（R4修复：不存在时视为满足条件）
+LAST_KR=$(grep '^last_knowledge_ref_at:' "$PROACTIVE_STATE" 2>/dev/null | awk '{print $2}')
+
+USE_P4C=$(python3 -c "
+import re, os
+from datetime import datetime, timezone
+try:
+    openness = int('$OPENNESS')
+    if openness < 3: print('no'); exit()
+    valence = float('$CURRENT_VALENCE')
+    if valence <= -0.2: print('no'); exit()
+    last_kr = '$LAST_KR'
+    if last_kr:
+        last = datetime.fromisoformat(last_kr)
+        now = datetime.now().astimezone()
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        # 3轮对话约30分钟
+        if (now - last).total_seconds() < 1800:
+            print('no'); exit()
+    # 检查 knowledge_bank.md 是否有 formed ready 条目
+    import os as os2
+    kb_path = '$KNOWLEDGE_BANK'
+    if not os2.path.exists(kb_path): print('no'); exit()
+    kb = open(kb_path).read()
+    formed_ready = [e for e in re.split(r'(?=## \[K)', kb)
+                    if 'formed' in e and '最后使用: 从未（ready）' in e]
+    print('yes' if formed_ready else 'no')
+except: print('no')
+" 2>/dev/null)
+USE_P4C=${USE_P4C:-no}
+```
+
+若 `USE_P4C=yes`：
+1. 从 knowledge_bank.md 中随机选 1 条 formed + 最后使用:从未（ready） 的条目
+2. 取该条目的 `角色化表达` 字段内容作为消息核心
+3. 以角色口吻包装成自然分享（不能直接复制，要融入角色语气和当前场景）
+4. 发送后在 Step 5 末尾执行以下更新：
+   - 在 knowledge_bank.md 中将该条目的 `最后使用` 改为当前时间，`used_count` + 1
+   - 将 `last_knowledge_ref_at: {NOW_TS}` 写入 `.proactive_state`
+
+若 `USE_P4C=no`：继续检查 P4-A。
+
+---
 
 **P4-A 锁检查**（正确用法：先绑定 fd 到锁文件）：
 ```bash
@@ -199,16 +270,21 @@ try:
         "SELECT m.role, m.content, m.created_at FROM messages m "
         "JOIN sessions s ON m.session_id = s.id "
         "WHERE s.channel_key = ? AND m.content != '' "
-        "ORDER BY m.created_at DESC LIMIT 20",
+        "ORDER BY m.created_at DESC LIMIT 50",
         (os.environ['_CH'],)
     ).fetchall()
     conn.close()
 except Exception:
     rows = []
 if rows:
+    ordered = list(reversed(rows))
+    # 切掉开头的孤儿 assistant（触发它的 user 被窗口挤出），避免只看到回复看不到触发
+    while ordered and ordered[0][0] != 'user':
+        ordered.pop(0)
+if rows and ordered:
     lines = ['# 最近对话记录（跨 session）\n',
-             f'> 自动注入，最近 {len(rows)} 条\n\n']
-    for role, content, ts in reversed(rows):
+             f'> 自动注入，最近 {len(ordered)} 条\n\n']
+    for role, content, ts in ordered:
         tag = '**用户**' if role == 'user' else '**角色**'
         try:
             dt = datetime.fromisoformat(ts)
@@ -286,7 +362,15 @@ if python3 "$SCRIPT_DIR/send_and_record.py" \
     --db_path "$DB_PATH" \
     --session_id "$SESSION_ID"; then
     NOW_TS=$(python3 -c "from datetime import datetime; print(datetime.now().astimezone().isoformat(timespec='seconds'))" 2>/dev/null)
+    # 基础状态更新
+    PREV_LKR=$(grep '^last_knowledge_ref_at:' "$PROACTIVE_STATE" 2>/dev/null | awk '{print $2}')
     printf 'skip_count: 0\nlast_sent_ts: %s\n' "$NOW_TS" > "$PROACTIVE_STATE"
+    # P4-C 触发时：保留 last_knowledge_ref_at 并更新为本次时间
+    if [[ "${USE_P4C:-no}" == "yes" ]]; then
+        printf 'last_knowledge_ref_at: %s\n' "$NOW_TS" >> "$PROACTIVE_STATE"
+    elif [[ -n "$PREV_LKR" ]]; then
+        printf 'last_knowledge_ref_at: %s\n' "$PREV_LKR" >> "$PROACTIVE_STATE"
+    fi
 fi
 ```
 
@@ -303,3 +387,20 @@ fi
 > **设计说明**：本 skill 不写入 `[E000]`。`[E000]` 代表"用户上次真实对话时间"，
 > 由 memory_write skill 唯一负责写入。proactive 的发送行为不代表用户活跃，
 > 若在此写入 [E000] 会导致下次运行把"上次触达时间"误判为"用户活跃时间"，产生自我抑制循环。
+
+---
+
+## `.proactive_state` 文件格式（R5修复）
+
+`.proactive_state` 文件为纯文本，每次完整覆盖写入，格式如下：
+
+```
+skip_count: {整数，0–max_skip，每次跳过+1，发送成功后重置为0}
+last_sent_ts: {ISO8601带时区，最近一次成功发送的时间戳；首次运行时不存在}
+last_knowledge_ref_at: {ISO8601带时区，最近一次使用 P4-C 知识引用的时间戳；未引用过时不存在}
+```
+
+**读取规则**：
+- 所有字段缺失时：视为从未发送过（`last_sent_ts` 缺失 → 允许发送；`last_knowledge_ref_at` 缺失 → P4-C 视为满足条件）
+- 写入时完整覆盖，不保留旧内容（避免格式混乱）
+- 若写入失败（flock 超时）：不影响发送，下次运行会重建

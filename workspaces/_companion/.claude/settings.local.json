@@ -4,6 +4,7 @@
       "Bash(flock *)",
       "Bash(python3 __WORKSPACE_DIR__/.claude/skills/feishu_ops/scripts/*.py *)",
       "Bash(python3 __WORKSPACE_DIR__/.claude/hooks/inject_history.py)",
+      "Bash(python3 __WORKSPACE_DIR__/.claude/hooks/inject_background_diff.py)",
       "Bash(bash __WORKSPACE_DIR__/.claude/hooks/reply_checklist.sh)",
       "Bash(ls *memory*)",
       "Bash(ls *tasks*)",
@@ -25,18 +26,30 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "type": "command",
-        "command": "bash __WORKSPACE_DIR__/.claude/hooks/reply_checklist.sh"
-      },
-      {
-        "type": "command",
-        "command": "python3 __WORKSPACE_DIR__/.claude/hooks/inject_history.py"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash __WORKSPACE_DIR__/.claude/hooks/reply_checklist.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 __WORKSPACE_DIR__/.claude/hooks/inject_history.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 __WORKSPACE_DIR__/.claude/hooks/inject_background_diff.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "type": "command",
-        "command": "echo '[系统·作者提醒] 后台操作已完成。本轮角色台词已在工具调用前创作完毕。作者现在收工——不再输出任何前台内容（含台词、旁白、感叹词）。'"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[系统·作者提醒] 后台操作已完成。本轮角色台词已在工具调用前创作完毕。作者现在收工——不再输出任何前台内容（含台词、旁白、感叹词）。'"
+          }
+        ]
       }
     ]
   }

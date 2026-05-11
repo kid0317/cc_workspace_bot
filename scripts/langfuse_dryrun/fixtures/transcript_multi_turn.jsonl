@@ -1,0 +1,4 @@
+{"type":"user","uuid":"u-user-1","message":{"role":"user","content":"first question"}}
+{"type":"assistant","uuid":"u-asst-1","requestId":"req_001","timestamp":"2026-05-06T10:00:00.000Z","message":{"id":"msg_t1_A","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"first answer"}],"usage":{"input_tokens":20,"output_tokens":10}}}
+{"type":"user","uuid":"u-user-2","message":{"role":"user","content":"second question"}}
+{"type":"assistant","uuid":"u-asst-2","requestId":"req_002","timestamp":"2026-05-06T10:00:01.000Z","message":{"id":"msg_t2_A","model":"claude-sonnet-4-6","content":[{"type":"text","text":"second answer"}],"usage":{"input_tokens":30,"output_tokens":15,"cache_read_input_tokens":20}}}

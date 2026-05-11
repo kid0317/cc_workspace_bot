@@ -1,6 +1,8 @@
 # ── Secrets & Config ──────────────────────────────────────────────────────────
 config.yaml
 config.yaml.bak*
+config.yaml.backup.*
+config.yaml.no_sonnet
 config.bailian.yaml
 **/feishu_ops/feishu.json
 
@@ -12,7 +14,11 @@ bot.db
 nohup.out
 server.pid
 *.log
+*.log.*
 *.log.wf
+
+# ── Python test cache ─────────────────────────────────────────────────────────
+.pytest_cache/
 
 # ── Local Claude Settings (tool permissions, not for sharing) ─────────────────
 **/.claude/settings.local.json

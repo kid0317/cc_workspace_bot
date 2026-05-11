@@ -57,10 +57,16 @@ type Task struct {
 	// The DB column retains DEFAULT true for rows inserted outside Go; LoadYAML
 	// always sets this field explicitly, so the struct-tag default is not needed.
 	SendOutput bool `gorm:"column:send_output;not null"`
-	CreatedBy  string
-	CreatedAt  time.Time
-	LastRunAt  *time.Time
-	DeletedAt  gorm.DeletedAt `gorm:"index"`
+	// PostArchive, when true, causes the framework to archive the target
+	// channel's active session after a successful run. Only meaningful for
+	// borrow-channel tasks (send_output=false + target_* set); validated at
+	// load time. Used by the companion workspace's daily_handoff task to
+	// auto-/new sessions at 04:00 without requiring a user message.
+	PostArchive bool `gorm:"column:post_archive;not null;default:false"`
+	CreatedBy   string
+	CreatedAt   time.Time
+	LastRunAt   *time.Time
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 
 // TaskYAML is the on-disk YAML representation of a task file.
@@ -72,18 +78,22 @@ type TaskYAML struct {
 	// Deprecated: app_id in YAML is ignored. The workspace ID is derived from
 	// the file path by the Watcher and injected at load time via LoadYAML.
 	// Setting this field has no effect.
-	AppID      string    `yaml:"app_id"`
-	Name       string    `yaml:"name"`
-	Cron       string    `yaml:"cron"`
-	TargetType string    `yaml:"target_type"`
-	TargetID   string    `yaml:"target_id"`
-	Prompt     string    `yaml:"prompt"`
+	AppID      string `yaml:"app_id"`
+	Name       string `yaml:"name"`
+	Cron       string `yaml:"cron"`
+	TargetType string `yaml:"target_type"`
+	TargetID   string `yaml:"target_id"`
+	Prompt     string `yaml:"prompt"`
 	// SendOutput controls whether Claude's text output is forwarded to the user.
 	// Nil means unset (LoadYAML defaults to true). Set to false for background
 	// tasks (memory_distill, life_sim). Using *bool avoids the Go zero-value
 	// trap where omitting send_output in YAML would silently disable output.
 	SendOutput *bool `yaml:"send_output"`
-	CreatedBy  string    `yaml:"created_by"`
-	CreatedAt  time.Time `yaml:"created_at"`
-	Enabled    bool      `yaml:"enabled"`
+	// PostArchive: framework archives the target channel's active session
+	// after a successful run. Only valid for borrow-channel tasks
+	// (send_output=false + target_* both set). See Task.PostArchive.
+	PostArchive bool      `yaml:"post_archive"`
+	CreatedBy   string    `yaml:"created_by"`
+	CreatedAt   time.Time `yaml:"created_at"`
+	Enabled     bool      `yaml:"enabled"`
 }

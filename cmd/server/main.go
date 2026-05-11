@@ -99,7 +99,9 @@ func main() {
 	fwd.target.Store(sessionMgr)
 
 	// ── Task subsystem ─────────────────────────────────────────────
-	taskRunner := task.NewRunner(cfg, database, executor, senders)
+	// sessionMgr is passed as ChannelArchiver so tasks with post_archive=true
+	// (e.g. companion daily_handoff) can rotate sessions without a user /new.
+	taskRunner := task.NewRunner(cfg, database, executor, senders, sessionMgr)
 	taskScheduler, err := task.NewScheduler(taskRunner)
 	if err != nil {
 		slog.Error("create task scheduler", "err", err)
@@ -131,6 +133,10 @@ func main() {
 		slog.Error("register cleanup job", "err", err)
 		os.Exit(1)
 	}
+
+	// Emit a per-workspace summary of YAML parse outcomes so operators notice
+	// silent template bugs on boot instead of discovering them days later.
+	logTaskParseSummary(taskWatcher)
 
 	taskScheduler.Start()
 	taskWatcher.Start(ctx)
@@ -205,6 +211,37 @@ func (f *dispatchForwarder) Dispatch(ctx context.Context, msg *feishu.IncomingMe
 
 // syncAppChannels is intentionally a no-op: channel records are created on first message.
 func syncAppChannels(_ *gorm.DB, _ *config.AppConfig) {}
+
+// logTaskParseSummary prints a one-line summary per workspace of how many
+// tasks/*.yaml files parsed cleanly vs. failed. Failed files are listed with
+// their error so broken templates don't go unnoticed for days.
+func logTaskParseSummary(w *task.Watcher) {
+	results := w.ListYAMLs()
+	byApp := make(map[string][]task.YAMLParseResult)
+	for _, r := range results {
+		byApp[r.AppID] = append(byApp[r.AppID], r)
+	}
+	for appID, rs := range byApp {
+		parsed, failed := 0, 0
+		for _, r := range rs {
+			if r.Err == nil {
+				parsed++
+			} else {
+				failed++
+			}
+		}
+		if failed == 0 {
+			slog.Info("task parse summary", "app_id", appID, "parsed", parsed, "failed", 0)
+			continue
+		}
+		slog.Warn("task parse summary", "app_id", appID, "parsed", parsed, "failed", failed)
+		for _, r := range rs {
+			if r.Err != nil {
+				slog.Warn("task parse failure", "app_id", appID, "file", r.Path, "err", r.Err)
+			}
+		}
+	}
+}
 
 // restoreEnabledTasks loads enabled tasks from DB and re-registers them with the scheduler.
 // If no DB records exist, it falls back to scanning YAML files in tasksDir and upserting

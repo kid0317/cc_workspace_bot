@@ -1,0 +1,50 @@
+# 每日交接定时任务模板（陪伴型空间专用）
+# 由 Claude 在 phase2_done 时从 SESSION_CONTEXT.md 解析占位符后写入 tasks/ 目录。
+#
+# 作用：每天凌晨 4 点自动压缩当日对话到 memory，然后由框架归档 session。
+# 用户白天发第一条消息时会进入一个全新的 session，skill 能正常加载，
+# 但跨 session 的 RECENT_HISTORY / memory / handoff_brief 保证"不忘事、不跳戏"。
+#
+# 约束：
+# - send_output: false（凌晨不打扰用户，任务静默执行）
+# - post_archive: true（框架 Execute 成功后归档当前 active session）
+# - 只在陪伴型空间使用：工作型空间不需要这种"情感延续 + 自动 /new"策略
+
+name: daily_handoff
+target_type: __TARGET_TYPE__     # p2p（从 channel_key 第一段解析）
+target_id: __TARGET_ID__         # 从 channel_key 第二段解析
+cron: "0 4 * * *"                  # 每日 04:00（服务器本地时区，预期与用户时区一致）
+enabled: true
+send_output: false
+post_archive: true
+prompt: |
+  现在是凌晨 4 点交接时间。**用户在睡觉，绝对不要发送任何消息，也不要产生任何对外文字**。
+
+  按顺序完成以下工作，完成后沉默退出：
+
+  1. 调用 conversation_summary skill，强制执行（即使 RECENT_HISTORY.md 未满 30 条也执行一次），
+     将当前情感主线压缩到 memory/session_summary.md（滚动更新，不覆盖）。
+
+  2. 调用 memory_distill skill，把过去 24 小时新出现的信息沉淀到对应 memory 文件。
+
+  3. 更新 memory/long_arc.md：追加一段今日作者札记（1-2 句话，重在"情感节奏的变化"，
+     不要流水账，不要复述话题）。
+
+  4. 覆写 memory/handoff_brief.md（即使内容没太大变化也要更新时间戳），格式：
+     ```
+     # 今日交接备忘
+     **生成时间**: {YYYY-MM-DD HH:MM}
+
+     ## 明日可延续的钩子
+     - {钩子 1：具体话题 + 角色的延续角度}
+     - {钩子 2}
+     - {钩子 3，可选}
+
+     ## 用户当前情绪底色
+     {1 句：平静 / 疲惫 / 兴奋 / 低落 / 防御 / 其他...}
+
+     ## 未兑现的承诺 / 需要记得的事
+     - {如果没有，写"无"}
+     ```
+
+  5. 结束。框架会在本任务成功后自动归档当前会话，用户次日首条消息进入全新 session。

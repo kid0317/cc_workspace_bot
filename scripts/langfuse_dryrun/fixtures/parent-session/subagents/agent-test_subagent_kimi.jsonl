@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u-sub-user-1","isSidechain":true,"agentId":"acfe2bec_test","slug":"goofy-frolicking-test","message":{"role":"user","content":"sub-agent input prompt 帮我分析"}}
+{"type":"assistant","uuid":"u-sub-asst-1","requestId":"req_sub_001","timestamp":"2026-05-06T10:00:00.000Z","isSidechain":true,"agentId":"acfe2bec_test","slug":"goofy-frolicking-test","message":{"id":"msg_sub_001","model":"kimi-k2.5","content":[{"type":"text","text":"sub-agent 完成的回答内容 with mixed English text"}],"usage":{"input_tokens":0,"output_tokens":0}}}

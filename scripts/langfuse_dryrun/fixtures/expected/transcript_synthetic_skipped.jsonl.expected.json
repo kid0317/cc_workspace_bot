@@ -1,0 +1,51 @@
+{
+  "distinct_messages": 2,
+  "is_subagent": false,
+  "rows_assistant": 2,
+  "rows_total": 3,
+  "traces": [
+    {
+      "id": "52fc5c8b702301086687aa53428971e9",
+      "input": "hi",
+      "metadata": {
+        "agent_id": null,
+        "agent_slug": null,
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "main",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "turn 1",
+      "observations": [
+        {
+          "id": "fccd85769edec43fe95f9911a8b4413e",
+          "input_preview": "hi",
+          "message_id": "msg_real_001",
+          "model": "claude-opus-4-7",
+          "name": "claude-opus-4-7",
+          "output_text": "real reply",
+          "request_id": "req_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 5,
+            "output": 3
+          },
+          "usage_source": "reported"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "app:test-app",
+        "kind:main"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "transcript_synthetic_skipped.jsonl",
+  "turns_emitted": 1
+}

@@ -1,0 +1,52 @@
+{
+  "distinct_messages": 1,
+  "is_subagent": true,
+  "rows_assistant": 1,
+  "rows_total": 2,
+  "traces": [
+    {
+      "id": "2bb5483ce246db77bdde6ac50fb9f074",
+      "input": "sub-agent input prompt 帮我分析",
+      "metadata": {
+        "agent_id": "acfe2bec_test",
+        "agent_slug": "goofy-frolicking-test",
+        "app_id": "test-app",
+        "channel_key": "test-channel",
+        "framework_session_id": "test-session",
+        "kind": "subagent",
+        "task_name": null,
+        "usage_aggregation": "per_message_dedupe_v1"
+      },
+      "name": "subagent[goofy-frolicking-test] turn 1",
+      "observations": [
+        {
+          "id": "b7fd980746501583b459bf31b23395b3",
+          "input_preview": "sub-agent input prompt 帮我分析",
+          "message_id": "msg_sub_001",
+          "model": "kimi-k2.5",
+          "name": "kimi-k2.5",
+          "output_text": "sub-agent 完成的回答内容 with mixed English text",
+          "request_id": "req_sub_001",
+          "started_at": "2026-05-06T10:00:00.000Z",
+          "tool_calls": [],
+          "type": "generation",
+          "usage_details": {
+            "input": 9,
+            "output": 15
+          },
+          "usage_source": "estimated_char"
+        }
+      ],
+      "session_id": "test-session",
+      "tags": [
+        "agent:goofy-frolicking-test",
+        "app:test-app",
+        "kind:subagent"
+      ],
+      "turn_num": 1,
+      "user_id": "test-user"
+    }
+  ],
+  "transcript": "agent-test_subagent_kimi.jsonl",
+  "turns_emitted": 1
+}

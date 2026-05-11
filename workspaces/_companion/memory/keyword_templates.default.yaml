@@ -1,0 +1,109 @@
+# 关键词模板·默认值（类模板层）
+#
+# 本文件由 _companion/ 提供，作为所有陪伴 workspace 的默认模板。
+# 每个 workspace 的 memory/keyword_templates.yaml（实例层）基于本文件派生 + 填槽。
+# sync_template.sh 同步时以 --force 覆盖本文件；workspace 的实例文件用 --preserve-slots 保留。
+#
+# 层级：
+#   1. 默认模板（本文件）                       → 模板维护者更新
+#   2. workspace 实例（memory/keyword_templates.yaml） → calibrate_templates 生成+填槽
+#   3. workspace override（实例文件的 overrides 块）   → 手工调校
+#
+_schema: 1
+
+# ─── 能力位图默认值（所有能力均 false，由 workspace 实例覆写）───
+capabilities:
+  has_physical_body: false
+  in_human_society: false
+  can_use_phone: false
+  can_use_modern_appliance: false
+  can_dream: false
+  has_career: false
+  has_family: false
+  has_romantic_partner: false
+  is_ip_character: false
+  has_multi_form: false
+
+# ─── 生活维度（5 个）───
+dimensions:
+  profession:
+    enabled_when: "has_career"
+    templates:
+      - "{profession} {hour_bucket}"
+      - "{profession} {city}"
+      - "{profession} {pain_point}"
+    slots_source: "persona.profession_anchors"
+    max_templates: 20
+
+  place:
+    enabled_when: "in_human_society || has_physical_body"
+    templates:
+      - "{city} {district} {venue}"
+      - "{city} {weather} {activity}"
+      - "{venue} {time_bucket}"
+    slots_source: "persona.place_anchors"
+    max_templates: 20
+
+  interest:
+    enabled_when: "always"
+    templates:
+      - "{interest_tag} {recent_event}"
+      - "{author_name} {book_genre}"
+      - "{hobby} 技巧"
+    slots_source: "persona.interest_anchors"
+    max_templates: 20
+
+  unresolved:
+    enabled_when: "always"
+    templates:
+      - "{thread_keyword}"
+      - "{thread_keyword} 怎么办"
+    slots_source: "memory/unresolved.md"
+    max_templates: 15
+
+  emotion:
+    enabled_when: "always"
+    templates:
+      - "{mood_word} {time_bucket}"
+      - "{mood_word} 怎么办"
+      - "{mood_word} 故事"
+    slots_source: "memory/RECENT_HISTORY.md#recent_24h"
+    max_templates: 10
+    priority_boost: 1.5
+
+# ─── 平台路由（按能力位图查表）───
+# 每条 rule 的 when 用简化布尔表达式（支持 &&, ||, !, 能力字段名）
+# 平台黑名单：由 material_fetch 过滤，不会被 primary/secondary 选中
+# 2026-04-21: 屏蔽小红书，账号容易被封
+blocked_platforms: ["xiaohongshu"]
+
+platform_rules:
+  - when: "is_ip_character"
+    primary: ["official_wiki"]
+    secondary: ["reddit:fan_community"]
+    note: "IP 角色优先官方设定，防止被现实素材污染"
+
+  - when: "!in_human_society && has_physical_body"
+    primary: ["reddit:r/mildlyinteresting", "reddit:r/Showerthoughts", "reddit:r/todayilearned"]
+    secondary: ["x:自然宠物", "reddit:r/aww"]
+    note: "非人类但有身体（宝可梦、动物拟人）"
+
+  - when: "in_human_society && has_career"
+    primary: ["x", "reddit:r/CasualConversation"]
+    secondary: ["reddit:r/AskReddit", "weibo"]
+    note: "人类社会职业角色"
+
+  - when: "in_human_society && !has_career"
+    primary: ["x", "reddit:r/relationships"]
+    secondary: ["reddit:r/AskReddit", "weibo"]
+    note: "人类社会但无固定职业（家庭主妇、学生等）"
+
+  - when: "always"  # fallback
+    primary: ["reddit:r/mildlyinteresting", "reddit:r/CasualConversation"]
+    secondary: []
+    note: "兜底规则"
+
+# ─── 全局黑名单（所有角色共享）───
+global_blacklist:
+  keywords: ["求私信", "进群", "加v", "代购", "MCN", "带货", "饭圈", "刷单"]
+  polarized: ["政党", "女权", "男拳", "民主自由议题"]

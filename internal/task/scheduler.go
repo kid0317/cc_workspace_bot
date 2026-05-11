@@ -62,6 +62,14 @@ func (s *Scheduler) Add(ctx context.Context, task *model.Task) error {
 			s.runner.Run(ctx, t)
 		}),
 		gocron.WithName(task.Name),
+		// gocron v2 default is NOT singleton — overlapping cron triggers spawn
+		// concurrent job instances. For our tasks that would mean two runs
+		// racing on the same sessions/<id>/ cwd (user tasks) or
+		// sessions/_system/<slug>/ cwd (system tasks), both writing
+		// SESSION_CONTEXT.md at the same time. Reschedule-on-busy skips the
+		// new trigger while the previous run is still in flight, which is
+		// safer than both running to completion with scrambled context.
+		gocron.WithSingletonMode(gocron.LimitModeReschedule),
 	)
 	if err != nil {
 		return fmt.Errorf("add job %s: %w", task.ID, err)
