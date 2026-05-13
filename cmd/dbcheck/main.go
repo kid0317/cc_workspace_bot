@@ -38,23 +38,27 @@ func main() {
 	stale := flag.Bool("stale-tasks", false, "list enabled tasks whose last_run_at is overdue")
 	flag.Parse()
 
-	database, err := db.Open("bot.db")
+	cfg := mustLoadConfig(*cfgPath)
+
+	registry, err := db.NewRegistry(cfg.Apps)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "open bot.db:", err)
+		fmt.Fprintln(os.Stderr, "open workspace databases:", err)
 		os.Exit(1)
 	}
-	// Silence gorm's default "record not found" warnings — the report already
-	// explains what missing means; the duplicate log line is noise.
-	database.Logger = database.Logger.LogMode(logger.Silent)
+	defer registry.Close()
+
+	// Silence gorm's default "record not found" warnings in all workspace DBs.
+	for _, appDB := range registry.All() {
+		appDB.Logger = appDB.Logger.LogMode(logger.Silent)
+	}
 
 	switch {
 	case *orphan:
-		cfg := mustLoadConfig(*cfgPath)
-		runOrphanYAML(database, cfg)
+		runOrphanYAML(registry, cfg)
 	case *stale:
-		runStaleTasks(database)
+		runStaleTasks(registry)
 	default:
-		runLegacyDump(database)
+		runLegacyDump(registry, cfg)
 	}
 }
 
@@ -69,7 +73,7 @@ func mustLoadConfig(path string) *config.Config {
 
 // ── orphan-yaml mode ─────────────────────────────────────────────────────────
 
-func runOrphanYAML(database *gorm.DB, cfg *config.Config) {
+func runOrphanYAML(reg *db.Registry, cfg *config.Config) {
 	fmt.Println("=== Orphan YAML Report ===")
 	fmt.Println("Every *.yaml in a tasks/ directory is cross-checked against the tasks table.")
 	fmt.Println()
@@ -77,6 +81,11 @@ func runOrphanYAML(database *gorm.DB, cfg *config.Config) {
 	total := 0
 	orphaned := 0
 	for _, app := range cfg.Apps {
+		appDB, err := reg.Get(app.ID)
+		if err != nil {
+			fmt.Printf("[%s] no DB: %v\n", app.ID, err)
+			continue
+		}
 		tasksDir := filepath.Join(app.WorkspaceDir, "tasks")
 		entries, err := os.ReadDir(tasksDir)
 		if err != nil {
@@ -91,7 +100,7 @@ func runOrphanYAML(database *gorm.DB, cfg *config.Config) {
 			}
 			total++
 			path := filepath.Join(tasksDir, e.Name())
-			reason := diagnoseYAML(database, app.ID, path)
+			reason := diagnoseYAML(appDB, app.ID, path)
 			if reason == "" {
 				continue // healthy; registered and enabled
 			}
@@ -142,15 +151,19 @@ func diagnoseYAML(database *gorm.DB, appID, path string) string {
 // its expected next run, i.e. now > schedule.Next(schedule.Next(last_run)).
 // Never-run tasks (last_run_at IS NULL) are reported separately so the
 // operator can tell "registered but never fired" from "used to work".
-func runStaleTasks(database *gorm.DB) {
+func runStaleTasks(reg *db.Registry) {
 	fmt.Println("=== Stale Task Report ===")
 	fmt.Println("Tasks whose last_run_at is more than one cron interval behind schedule.")
 	fmt.Println()
 
 	var tasks []model.Task
-	if err := database.Where("enabled = ?", true).Find(&tasks).Error; err != nil {
-		fmt.Fprintln(os.Stderr, "query tasks:", err)
-		os.Exit(1)
+	for appID, appDB := range reg.All() {
+		var appTasks []model.Task
+		if err := appDB.Where("enabled = ?", true).Find(&appTasks).Error; err != nil {
+			fmt.Fprintf(os.Stderr, "query tasks for %s: %v\n", appID, err)
+			continue
+		}
+		tasks = append(tasks, appTasks...)
 	}
 
 	now := time.Now()
@@ -198,26 +211,36 @@ func runStaleTasks(database *gorm.DB) {
 
 // ── legacy dump (preserved for backwards compatibility) ───────────────────────
 
-func runLegacyDump(database *gorm.DB) {
-	fmt.Println("=== All YZK Worker Sessions ===")
-	var sessions []model.Session
-	database.Where("channel_key LIKE ?", "%yzk_worker%").
-		Order("updated_at DESC").Find(&sessions)
-	for _, s := range sessions {
-		fmt.Printf("  ID=%s  channel=%s  status=%s  claude_sid=%q  created=%s  updated=%s\n",
-			s.ID, s.ChannelKey, s.Status, s.ClaudeSessionID,
-			s.CreatedAt.Format("15:04:05"), s.UpdatedAt.Format("15:04:05"))
+func runLegacyDump(reg *db.Registry, cfg *config.Config) {
+	fmt.Println("=== YZK Worker Sessions (per workspace) ===")
+	for _, app := range cfg.Apps {
+		if app.ID != "yzk_worker" {
+			continue
+		}
+		appDB, err := reg.Get(app.ID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no DB for %s: %v\n", app.ID, err)
+			continue
+		}
+		var sessions []model.Session
+		appDB.Where("channel_key LIKE ?", "%yzk_worker%").
+			Order("updated_at DESC").Find(&sessions)
+		for _, s := range sessions {
+			fmt.Printf("  ID=%s  channel=%s  status=%s  claude_sid=%q  created=%s  updated=%s\n",
+				s.ID, s.ChannelKey, s.Status, s.ClaudeSessionID,
+				s.CreatedAt.Format("15:04:05"), s.UpdatedAt.Format("15:04:05"))
 
-		var msgs []model.Message
-		database.Where("session_id = ?", s.ID).Order("created_at ASC").Find(&msgs)
-		for _, m := range msgs {
-			content := m.Content
-			if len(content) > 120 {
-				content = content[:120] + "..."
+			var msgs []model.Message
+			appDB.Where("session_id = ?", s.ID).Order("created_at ASC").Find(&msgs)
+			for _, m := range msgs {
+				content := m.Content
+				if len(content) > 120 {
+					content = content[:120] + "..."
+				}
+				fmt.Printf("    [%s] role=%-9s time=%s  [%d chars] %s\n",
+					m.ID[:8], m.Role, m.CreatedAt.Format("15:04:05"),
+					len(m.Content), content)
 			}
-			fmt.Printf("    [%s] role=%-9s time=%s  [%d chars] %s\n",
-				m.ID[:8], m.Role, m.CreatedAt.Format("15:04:05"),
-				len(m.Content), content)
 		}
 	}
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/kid0317/cc-workspace-bot/internal/claude"
 	"github.com/kid0317/cc-workspace-bot/internal/config"
+	"github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/feishu"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
@@ -33,7 +34,7 @@ type ChannelArchiver interface {
 type Runner struct {
 	cfg         *config.Config
 	appRegistry map[string]*config.AppConfig
-	db          *gorm.DB
+	dbReg       *db.Registry
 	executor    *claude.Executor
 	senders     map[string]*feishu.Sender
 	archiver    ChannelArchiver
@@ -44,7 +45,7 @@ type Runner struct {
 // the Run method guards against nil before dispatching.
 func NewRunner(
 	cfg *config.Config,
-	db *gorm.DB,
+	reg *db.Registry,
 	executor *claude.Executor,
 	senders map[string]*feishu.Sender,
 	archiver ChannelArchiver,
@@ -57,7 +58,7 @@ func NewRunner(
 	return &Runner{
 		cfg:         cfg,
 		appRegistry: registry,
-		db:          db,
+		dbReg:       reg,
 		executor:    executor,
 		senders:     senders,
 		archiver:    archiver,
@@ -123,7 +124,7 @@ func (r *Runner) Run(ctx context.Context, task *model.Task) {
 			} else {
 				// Record only on confirmed delivery so conversation history
 				// stays consistent with what the user actually received.
-				r.recordSentMessage(sess.ID, result.Text, id)
+				r.recordSentMessage(task.AppID, sess.ID, result.Text, id)
 			}
 		} else {
 			slog.Info("task runner: send_output=false, suppressing text output",
@@ -249,20 +250,40 @@ func systemTaskSlug(taskID string) string {
 
 // touchLastRun updates the task's last_run_at timestamp. Extracted so both
 // user-facing and system task paths stay in sync on scheduling telemetry.
+// taskID has format "{app_id}/{slug}"; the app_id prefix selects the right DB.
 func (r *Runner) touchLastRun(taskID string) {
+	appID := appIDFromTaskID(taskID)
+	appDB, err := r.dbReg.Get(appID)
+	if err != nil {
+		slog.Error("task runner: db not found for touchLastRun", "task_id", taskID, "err", err)
+		return
+	}
 	now := time.Now()
-	if err := r.db.Model(&model.Task{}).Where("id = ?", taskID).Update("last_run_at", now).Error; err != nil {
+	if err := appDB.Model(&model.Task{}).Where("id = ?", taskID).Update("last_run_at", now).Error; err != nil {
 		slog.Error("task runner: update last_run_at", "err", err, "task_id", taskID)
 	}
 }
 
+// appIDFromTaskID extracts the app_id prefix from a task ID of the form "{app_id}/{slug}".
+func appIDFromTaskID(taskID string) string {
+	if i := strings.Index(taskID, "/"); i >= 0 {
+		return taskID[:i]
+	}
+	return taskID
+}
+
 func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg *config.AppConfig) (*model.Session, error) {
+	appDB, err := r.dbReg.Get(appID)
+	if err != nil {
+		return nil, fmt.Errorf("get db for app %q: %w", appID, err)
+	}
+
 	var sess model.Session
 	// Reuse the most recent session for this channel regardless of status.
 	// Filtering by status='active' risks unbounded session growth: if a session
 	// is ever archived (e.g. by a /new command), every subsequent task execution
 	// on the same channel would create a new orphaned session directory.
-	result := r.db.Where("channel_key = ?", channelKey).
+	result := appDB.Where("channel_key = ?", channelKey).
 		Order("created_at DESC").First(&sess)
 	if result.Error == nil {
 		return &sess, nil
@@ -275,7 +296,7 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 	// Ensure channel record exists.
 	chatType, chatID := parseChannelKey(channelKey)
 	var ch model.Channel
-	if err := r.db.Where("channel_key = ?", channelKey).First(&ch).Error; err != nil {
+	if err := appDB.Where("channel_key = ?", channelKey).First(&ch).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("query channel: %w", err)
 		}
@@ -286,7 +307,7 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 			ChatID:     chatID,
 			CreatedAt:  time.Now(),
 		}
-		if err := r.db.Create(&ch).Error; err != nil {
+		if err := appDB.Create(&ch).Error; err != nil {
 			return nil, fmt.Errorf("create channel: %w", err)
 		}
 	}
@@ -305,7 +326,7 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	if err := r.db.Create(&sess).Error; err != nil {
+	if err := appDB.Create(&sess).Error; err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 	return &sess, nil
@@ -442,7 +463,13 @@ func validateTaskFields(ty *model.TaskYAML, sendOutput bool, path string) error 
 // recordSentMessage writes the proactively-sent message to the messages table
 // so that conversation history is consistent when the user replies on the same channel.
 // Without this, Claude would have no memory of what it said between sessions.
-func (r *Runner) recordSentMessage(sessionID, content, feishuMsgID string) {
+func (r *Runner) recordSentMessage(appID, sessionID, content, feishuMsgID string) {
+	appDB, err := r.dbReg.Get(appID)
+	if err != nil {
+		slog.Error("task runner: db not found for recordSentMessage",
+			"app_id", appID, "session_id", sessionID, "err", err)
+		return
+	}
 	m := &model.Message{
 		ID:          uuid.New().String(),
 		SessionID:   sessionID,
@@ -452,7 +479,7 @@ func (r *Runner) recordSentMessage(sessionID, content, feishuMsgID string) {
 		FeishuMsgID: feishuMsgID,
 		CreatedAt:   time.Now(),
 	}
-	if err := r.db.Create(m).Error; err != nil {
+	if err := appDB.Create(m).Error; err != nil {
 		// Message was already delivered to Feishu; DB failure causes amnesia
 		// (Claude won't see this message next session) but is not user-visible.
 		slog.Error("task runner: record sent message",

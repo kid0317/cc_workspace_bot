@@ -15,6 +15,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"gorm.io/gorm"
 
+	"github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
 
@@ -31,7 +32,7 @@ type parseErrKey struct {
 // Watcher monitors the tasks/ directory of each workspace and syncs YAML files to DB.
 type Watcher struct {
 	scheduler *Scheduler
-	db        *gorm.DB
+	dbReg     *db.Registry
 	watcher   *fsnotify.Watcher
 	mu        sync.RWMutex
 	dirAppIDs map[string]string // watched dir path → workspace appID
@@ -42,14 +43,14 @@ type Watcher struct {
 
 // NewWatcher creates a Watcher. The caller must call Start before AddDir,
 // or call Close if Start is never called, to avoid leaking the fsnotify FD.
-func NewWatcher(scheduler *Scheduler, db *gorm.DB) (*Watcher, error) {
+func NewWatcher(scheduler *Scheduler, reg *db.Registry) (*Watcher, error) {
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 	return &Watcher{
 		scheduler: scheduler,
-		db:        db,
+		dbReg:     reg,
 		watcher:   fw,
 		dirAppIDs: make(map[string]string),
 		errCache:  make(map[parseErrKey]struct{}),
@@ -355,12 +356,18 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 }
 
 func (w *Watcher) upsertTask(ctx context.Context, task *model.Task) {
+	appDB, err := w.dbReg.Get(task.AppID)
+	if err != nil {
+		slog.Error("task watcher: db not found for app", "app_id", task.AppID, "err", err)
+		return
+	}
+
 	var existing model.Task
-	err := w.db.Unscoped().Where("id = ?", task.ID).First(&existing).Error
+	err = appDB.Unscoped().Where("id = ?", task.ID).First(&existing).Error
 
 	// C-3: use errors.Is for GORM sentinel errors.
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if err := w.db.Create(task).Error; err != nil {
+		if err := appDB.Create(task).Error; err != nil {
 			slog.Error("task watcher: create task in DB", "err", err)
 			return
 		}
@@ -384,7 +391,7 @@ func (w *Watcher) upsertTask(ctx context.Context, task *model.Task) {
 			"send_output": task.SendOutput,
 			"deleted_at":  gorm.Expr("NULL"),
 		}
-		if err := w.db.Model(&existing).Unscoped().Updates(updates).Error; err != nil {
+		if err := appDB.Model(&existing).Unscoped().Updates(updates).Error; err != nil {
 			slog.Error("task watcher: update task in DB", "err", err)
 			return
 		}
@@ -402,8 +409,15 @@ func (w *Watcher) upsertTask(ctx context.Context, task *model.Task) {
 }
 
 func (w *Watcher) removeTask(id string) {
+	// task ID format: "{app_id}/{slug}"
+	appID := appIDFromTaskID(id)
+	appDB, err := w.dbReg.Get(appID)
+	if err != nil {
+		slog.Error("task watcher: db not found for removeTask", "task_id", id, "err", err)
+		return
+	}
 	w.scheduler.Remove(id)
-	if err := w.db.Where("id = ?", id).Delete(&model.Task{}).Error; err != nil {
+	if err := appDB.Where("id = ?", id).Delete(&model.Task{}).Error; err != nil {
 		slog.Error("task watcher: delete task from DB", "task_id", id, "err", err)
 	}
 	slog.Info("task watcher: removed task", "task_id", id)

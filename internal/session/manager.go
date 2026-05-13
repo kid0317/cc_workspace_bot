@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/kid0317/cc-workspace-bot/internal/claude"
 	"github.com/kid0317/cc-workspace-bot/internal/config"
+	"github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/feishu"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
@@ -19,7 +19,7 @@ import (
 type Manager struct {
 	cfg         *config.Config
 	appRegistry map[string]*config.AppConfig // app_id -> AppConfig
-	db          *gorm.DB
+	dbReg       *db.Registry
 	executor    *claude.Executor
 	senders     map[string]*feishu.Sender // app_id -> Sender
 
@@ -37,7 +37,7 @@ type Manager struct {
 // NewManager creates a Manager. senders maps app_id to feishu.Sender.
 func NewManager(
 	cfg *config.Config,
-	db *gorm.DB,
+	reg *db.Registry,
 	executor *claude.Executor,
 	senders map[string]*feishu.Sender,
 ) *Manager {
@@ -49,7 +49,7 @@ func NewManager(
 	return &Manager{
 		cfg:         cfg,
 		appRegistry: registry,
-		db:          db,
+		dbReg:       reg,
 		executor:    executor,
 		senders:     senders,
 	}
@@ -91,7 +91,12 @@ func (m *Manager) Wait() {
 //
 // Idempotent: UPDATE with status='active' filter is a no-op if already archived.
 func (m *Manager) ArchiveChannel(channelKey string) error {
-	res := m.db.Model(&model.Session{}).
+	appID := appIDFromChannelKey(channelKey)
+	appDB, err := m.dbReg.Get(appID)
+	if err != nil {
+		return fmt.Errorf("archive channel %s: %w", channelKey, err)
+	}
+	res := appDB.Model(&model.Session{}).
 		Where("channel_key = ? AND status = ?", channelKey, statusActive).
 		Updates(map[string]any{
 			"status":     statusArchived,
@@ -103,6 +108,15 @@ func (m *Manager) ArchiveChannel(channelKey string) error {
 	slog.Info("session: archived by task",
 		"channel", channelKey, "rows", res.RowsAffected)
 	return nil
+}
+
+// appIDFromChannelKey extracts the app_id from a channel key.
+// Channel key format: {type}:{...}:{app_id} — app_id is always the last segment.
+func appIDFromChannelKey(channelKey string) string {
+	if i := strings.LastIndex(channelKey, ":"); i >= 0 {
+		return channelKey[i+1:]
+	}
+	return channelKey
 }
 
 // getOrCreateWorker returns the existing Worker or starts a new one.
@@ -131,8 +145,14 @@ func (m *Manager) getOrCreateWorker(ctx context.Context, msg *feishu.IncomingMes
 		return nil
 	}
 
+	appDB, err := m.dbReg.Get(msg.AppID)
+	if err != nil {
+		slog.Error("session: db not found for app", "app_id", msg.AppID, "err", err)
+		return nil
+	}
+
 	idleTimeout := time.Duration(m.cfg.Session.WorkerIdleTimeoutMinutes) * time.Minute
-	worker := newWorker(msg.ChannelKey, appCfg, m.db, m.executor, sender, idleTimeout)
+	worker := newWorker(msg.ChannelKey, appCfg, appDB, m.executor, sender, idleTimeout)
 
 	m.workers.Store(msg.ChannelKey, worker)
 

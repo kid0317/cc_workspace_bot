@@ -7,10 +7,11 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
 
-// MigrateTaskIDs rewrites legacy task ID formats to the canonical "app_id/slug" scheme.
+// MigrateTaskIDs rewrites legacy task ID formats to the canonical "app_id/slug" scheme across all workspace DBs.
 //
 // Before this migration, task IDs were derived from filename alone, causing
 // cross-workspace collisions when multiple workspaces used the same filename
@@ -29,20 +30,27 @@ import (
 // hard-deleted rather than leaving orphaned records in the DB.
 // Transaction: all renames run in a single transaction; failure is logged and
 // non-fatal — old-format rows remain functional until the next startup attempt.
-func MigrateTaskIDs(db *gorm.DB) {
+// MigrateTaskIDs runs the migration on every workspace DB in the registry.
+func MigrateTaskIDs(reg *db.Registry) {
+	for appID, appDB := range reg.All() {
+		migrateTaskIDsForDB(appID, appDB)
+	}
+}
+
+func migrateTaskIDsForDB(appID string, appDB *gorm.DB) {
 	// Load all non-migrated rows (those without the "/" namespace separator).
 	var legacy []model.Task
-	if err := db.Unscoped().Where("id NOT LIKE '%/%'").Find(&legacy).Error; err != nil {
-		slog.Error("migrateTaskIDs: query legacy rows", "err", err)
+	if err := appDB.Unscoped().Where("id NOT LIKE '%/%'").Find(&legacy).Error; err != nil {
+		slog.Error("migrateTaskIDs: query legacy rows", "app_id", appID, "err", err)
 		return
 	}
 	if len(legacy) == 0 {
 		return
 	}
 
-	slog.Info("migrateTaskIDs: found legacy task IDs", "count", len(legacy))
+	slog.Info("migrateTaskIDs: found legacy task IDs", "app_id", appID, "count", len(legacy))
 
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err := appDB.Transaction(func(tx *gorm.DB) error {
 		for _, t := range legacy {
 			if t.AppID == "" {
 				slog.Warn("migrateTaskIDs: skipping row with empty app_id", "id", t.ID)
@@ -88,6 +96,6 @@ func MigrateTaskIDs(db *gorm.DB) {
 	if err != nil {
 		// Non-fatal: legacy rows continue to work with their old IDs until the
 		// next startup retries the migration.
-		slog.Error("migrateTaskIDs: transaction failed, legacy IDs unchanged", "err", err)
+		slog.Error("migrateTaskIDs: transaction failed, legacy IDs unchanged", "app_id", appID, "err", err)
 	}
 }

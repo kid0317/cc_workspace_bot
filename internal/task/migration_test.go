@@ -8,8 +8,16 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	dbpkg "github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
+
+// migrTestReg wraps a single *gorm.DB into a Registry for migration tests.
+// The appID key is arbitrary — migrateTaskIDsForDB only uses it for logging;
+// the actual task rename logic reads t.AppID from the DB row.
+func migrTestReg(gdb *gorm.DB) *dbpkg.Registry {
+	return dbpkg.NewRegistryFromMap(map[string]*gorm.DB{"test": gdb})
+}
 
 // openTestDB creates an in-memory SQLite DB with the tasks table auto-migrated.
 func openTestDB(t *testing.T) *gorm.DB {
@@ -56,14 +64,14 @@ func taskExists(db *gorm.DB, id string) bool {
 func TestMigrateTaskIDs_EmptyDB(t *testing.T) {
 	db := openTestDB(t)
 	// Should be a no-op — no panic, no error.
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 }
 
 func TestMigrateTaskIDs_AlreadyMigrated(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "xh_yibu/proactive_reach", "xh_yibu")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	// Row must still exist under the same ID.
 	if !taskExists(db, "xh_yibu/proactive_reach") {
@@ -75,7 +83,7 @@ func TestMigrateTaskIDs_BareName(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "proactive_reach", "xh_yibu")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "proactive_reach") {
 		t.Error("legacy bare-name row should have been renamed")
@@ -89,7 +97,7 @@ func TestMigrateTaskIDs_UUIDFilename(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "1ff20d20-4469-4346-8e96-3dda5d71c123", "investment")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "1ff20d20-4469-4346-8e96-3dda5d71c123") {
 		t.Error("legacy UUID row should have been renamed")
@@ -105,7 +113,7 @@ func TestMigrateTaskIDs_LegacyDotPrefix(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "ycm_mate.proactive_reach", "ycm_mate")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "ycm_mate.proactive_reach") {
 		t.Error("legacy dotted-prefix row should have been renamed")
@@ -125,7 +133,7 @@ func TestMigrateTaskIDs_ConflictDropsLegacy(t *testing.T) {
 	seedTask(t, db, "proactive_reach", "xh_yibu")
 	seedTask(t, db, "xh_yibu/proactive_reach", "xh_yibu")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "proactive_reach") {
 		t.Error("stale legacy row should have been deleted on conflict")
@@ -140,7 +148,7 @@ func TestMigrateTaskIDs_EmptyAppID(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "orphan_task", "")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if !taskExists(db, "orphan_task") {
 		t.Error("row with empty app_id should be left untouched")
@@ -152,8 +160,8 @@ func TestMigrateTaskIDs_Idempotent(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "life_sim", "xh_yibu")
 
-	MigrateTaskIDs(db)
-	MigrateTaskIDs(db) // second run
+	MigrateTaskIDs(migrTestReg(db))
+	MigrateTaskIDs(migrTestReg(db)) // second run
 
 	if taskExists(db, "life_sim") {
 		t.Error("legacy row should be gone after second run")
@@ -172,7 +180,7 @@ func TestMigrateTaskIDs_MultipleWorkspaces(t *testing.T) {
 	// be created fresh by the watcher on the next fsnotify event.
 	seedTask(t, db, "proactive_reach", "xh_yibu")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if !taskExists(db, "xh_yibu/proactive_reach") {
 		t.Error("xh_yibu/proactive_reach should exist after migration")

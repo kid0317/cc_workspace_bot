@@ -11,6 +11,7 @@ config.bailian.yaml
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 bot.db
+bot.db.*
 nohup.out
 server.pid
 *.log
@@ -27,6 +28,9 @@ server.pid
 __pycache__/
 *.pyc
 *.pyo
+
+# ── feishu_ops local doc cache (runtime) ──────────────────────────────────────
+**/feishu_ops/index/
 
 # ── Workspace Runtime Data ────────────────────────────────────────────────────
 # Session directories contain user conversation data

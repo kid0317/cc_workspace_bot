@@ -159,7 +159,7 @@ func (e *Executor) executeOnce(ctx context.Context, req *ExecuteRequest) (*Execu
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
-	if err := writeSessionContext(sessionDir, req, e.cfg.DBPath); err != nil {
+	if err := writeSessionContext(sessionDir, req, req.AppConfig.DBPath); err != nil {
 		return nil, fmt.Errorf("write session context: %w", err)
 	}
 
