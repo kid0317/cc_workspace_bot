@@ -146,15 +146,32 @@ def migrate_app(
     stats["channels"] = len(channels)
 
     # ── 2. sessions ──────────────────────────────────────────────────────────
+    # 历史包袱：sessions.channel_key 的真值是末段 app_id 后缀，但 channels
+    # 表里只有 bot 自身身份那一行，绝大多数实际 chat 在 channels 里没注册。
+    # 因此除了 channels.app_id IN 之外，还要按 channel_key 后缀兜底，否则
+    # 大批 orphan sessions 会被丢掉（参考 backfill_orphan_sessions.py）。
     sessions = []
-    session_ids = []
+    seen_session_ids: set[str] = set()
     if channel_keys:
         placeholders = ",".join("?" * len(channel_keys))
-        sessions = src.execute(
+        rows = src.execute(
             f"SELECT * FROM sessions WHERE channel_key IN ({placeholders})",
             channel_keys,
         ).fetchall()
-        session_ids = [r["id"] for r in sessions]
+        for r in rows:
+            if r["id"] not in seen_session_ids:
+                sessions.append(r)
+                seen_session_ids.add(r["id"])
+    # 补抓 orphan sessions（channel_key 末段后缀匹配 app_id）
+    orphan_rows = src.execute(
+        "SELECT * FROM sessions WHERE channel_key LIKE ?",
+        (f"%:{app_id}",),
+    ).fetchall()
+    for r in orphan_rows:
+        if r["id"] not in seen_session_ids:
+            sessions.append(r)
+            seen_session_ids.add(r["id"])
+    session_ids = list(seen_session_ids)
     stats["sessions"] = len(sessions)
 
     # ── 3. messages ──────────────────────────────────────────────────────────

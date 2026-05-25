@@ -255,6 +255,15 @@ exec 9>&-
 
 ## Step 4：加载情绪上下文（辅助生成）
 
+> ⚠️ **CRITICAL — 严禁修改下方 bash 代码**
+>
+> - **必须**使用 Step 1 已读取的 $DB_PATH 和 $CHANNEL_KEY（来自 SESSION_CONTEXT.md，真值源）
+> - **禁止**写死 DB_PATH=/root/cc_workspace_bot/bot.db（这是迁移前的旧共享库，会跨 workspace 污染）
+> - **禁止**截短 $CHANNEL_KEY（如 split(":")[0]、去掉 :app_id 后缀），channel_key 必须**完整精确匹配**，**不要用 LIKE**
+> - **禁止**自己即兴写 SQL/Python 替代下方代码——曾发生过 LLM 改写 SQL 导致跨 app 拉到别人对话写入 RECENT_HISTORY.md，主动消息内容彻底错乱的事故
+>
+> 如果 $DB_PATH 或 $CHANNEL_KEY 为空，直接跳过 Step 4，**不要尝试"修复"**。
+
 **前置：重新生成 RECENT_HISTORY.md**（proactive 任务不经过 UserPromptSubmit hook，inject_history.py 不会自动刷新，必须手动重建）：
 
 ```bash

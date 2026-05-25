@@ -28,7 +28,7 @@ _USAGE_KEYS_FOR_ZERO_CHECK = (
 # ── data structures ─────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolCall:
     id: str
     name: str
@@ -169,6 +169,34 @@ def _is_tool_result_only(content: Any) -> bool:
     )
 
 
+def _stringify_tool_result_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(parts)
+    return ""
+
+
+def _extract_tool_results(content: Any) -> dict[str, str]:
+    """tool_use_id → stringified output. Marks is_error results with a prefix."""
+    out: dict[str, str] = {}
+    if not isinstance(content, list):
+        return out
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "tool_result":
+            continue
+        tid = b.get("tool_use_id")
+        if not tid or tid in out:
+            continue
+        text = _stringify_tool_result_content(b.get("content"))
+        if b.get("is_error"):
+            text = f"[error] {text}"
+        out[tid] = text
+    return out
+
+
 def _extract_user_text(row: dict) -> str:
     content = _extract_content(row)
     if isinstance(content, str):
@@ -244,22 +272,45 @@ def build_turns(rows: list[dict]) -> list[Turn]:
                 cur_calls.append(_build_llm_call(next_call, user_text_for_estimate=cur_user))
             next_call = next(iter_merged, None)
 
+    pending_tool_calls: dict[str, ToolCall] = {}
+
+    def _register_tool_calls(calls: list[LLMCall]) -> None:
+        for c in calls:
+            for tc in c.tool_calls:
+                if tc.id:
+                    pending_tool_calls[tc.id] = tc
+
+    def _apply_tool_results(content: Any) -> None:
+        for tid, text in _extract_tool_results(content).items():
+            tc = pending_tool_calls.get(tid)
+            if tc is not None and tc.output is None:
+                tc.output = text
+
     for i, row in enumerate(rows):
         rtype = row.get("type")
-        if rtype == "user" and not _is_tool_result_only(_extract_content(row)):
-            # flush any pending calls up to (but not including) this user row
-            _flush_calls_up_to(i - 1)
-            if cur_calls or cur_user:
-                turns.append(Turn(
-                    turn_num=len(turns) + 1,
-                    user_text=cur_user,
-                    llm_calls=cur_calls,
-                ))
-            cur_user = _extract_user_text(row)
-            cur_calls = []
+        if rtype == "user":
+            content = _extract_content(row)
+            if not _is_tool_result_only(content):
+                # flush any pending calls up to (but not including) this user row
+                _flush_calls_up_to(i - 1)
+                _register_tool_calls(cur_calls)
+                if cur_calls or cur_user:
+                    turns.append(Turn(
+                        turn_num=len(turns) + 1,
+                        user_text=cur_user,
+                        llm_calls=cur_calls,
+                    ))
+                cur_user = _extract_user_text(row)
+                cur_calls = []
+            # Harvest tool_result blocks from any user row (pure tool_result
+            # rows AND mixed-content rows).
+            _flush_calls_up_to(i)
+            _register_tool_calls(cur_calls)
+            _apply_tool_results(content)
 
     # final flush
     _flush_calls_up_to(len(rows))
+    _register_tool_calls(cur_calls)
     if cur_calls or cur_user:
         turns.append(Turn(
             turn_num=len(turns) + 1,
