@@ -1,0 +1,39 @@
+apps:
+  - id: "product-assistant"
+    feishu_app_id: "cli_your_feishu_app_id"
+    feishu_app_secret: "your_feishu_app_secret"
+    feishu_verification_token: ""
+    feishu_encrypt_key: ""
+    workspace_dir: "./workspaces/product-assistant"
+    workspace_mode: "work"
+    allowed_chats: []
+    claude:
+      permission_mode: "acceptEdits"
+      provider: "bailian"
+      model: "qwen-plus"
+      allowed_tools:
+        - "Bash"
+        - "Read"
+        - "Edit"
+        - "Write"
+
+server:
+  port: 8080
+
+claude:
+  timeout_minutes: 5
+  max_turns: 20
+  default_provider: "bailian"
+  providers:
+    bailian:
+      base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+      auth_token: "your_dashscope_api_key"
+      model: "qwen-plus"
+
+session:
+  worker_idle_timeout_minutes: 30
+
+cleanup:
+  attachments_retention_days: 7
+  attachments_max_days: 30
+  schedule: "0 2 * * *"

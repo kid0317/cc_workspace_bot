@@ -1,0 +1,5 @@
+{
+  "app_id": "cli_your_feishu_app_id",
+  "app_secret": "your_feishu_app_secret",
+  "lark_profile": "your-workspace-id"
+}

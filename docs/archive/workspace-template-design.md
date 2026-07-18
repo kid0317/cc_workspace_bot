@@ -43,7 +43,7 @@ workspaces/_template/
 
 ## 二、存量 Workspace 分析
 
-### 2.1 /root/child — 育儿顾问
+### 2.1 /srv/workspaces/child — 育儿顾问
 
 **成熟度评分**：★★★★☆
 
@@ -81,7 +81,7 @@ skills/
 
 ---
 
-### 2.2 /root/course — 课程开发
+### 2.2 /srv/workspaces/course — 课程开发
 
 **成熟度评分**：★★★★★
 
@@ -121,7 +121,7 @@ study/              # 学习模式归档（知识吸收 → 课程产出）
 
 ---
 
-### 2.3 /root/health — 健康管理
+### 2.3 /srv/workspaces/health — 健康管理
 
 **成熟度评分**：★★☆☆☆（已初始化，尚未激活）
 
@@ -145,7 +145,7 @@ CLAUDE.md 顶部直接写入用户档案（姓名/年龄/BMI/目标/家族史）
 
 ---
 
-### 2.4 /root/investment — 投资管理
+### 2.4 /srv/workspaces/investment — 投资管理
 
 **成熟度评分**：★★★★★
 

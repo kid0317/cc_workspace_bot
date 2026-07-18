@@ -1,15 +1,15 @@
 # 陪伴型 Workspace 定时任务初始化设计
 
-> ⚠️ **已过期（DEPRECATED）**  
-> 本文档为任务初始化专项设计文档（v1.0–v1.2），其中的设计方案已全部实施完成。  
-> 当前权威文档为 [`companion-workspace-spec.md`](./companion-workspace-spec.md)。  
+> ⚠️ **已过期（DEPRECATED）**
+> 本文档为任务初始化专项设计文档（v1.0–v1.2），其中的设计方案已全部实施完成。
+> 当前权威文档为 [`companion-workspace-spec.md`](./companion-workspace-spec.md)。
 > 本文档保留供历史参考（根因分析 + 实施决策过程）。
 >
 > ---
 >
-> 版本：v1.2（2026-04-11 二轮架构师 Review 修复：upsertTask 缺字段 + CLAUDE.md 模板实例化 + `__WORKSPACE_DIR__` 占位符未替换）  
-> v1.1：补充 review 发现 + 后台任务消息泄漏问题  
-> v1.0：诊断 xh_yibu 从未收到主动消息，暴露的系统性设计问题
+> 版本：v1.2（2026-04-11 二轮架构师 Review 修复：upsertTask 缺字段 + CLAUDE.md 模板实例化 + `__WORKSPACE_DIR__` 占位符未替换）
+> v1.1：补充 review 发现 + 后台任务消息泄漏问题
+> v1.0：诊断 workspace_a 从未收到主动消息，暴露的系统性设计问题
 
 ---
 
@@ -17,11 +17,11 @@
 
 ### 1.1 原始问题
 
-**现象**：xh_yibu 陪伴机器人自部署以来从未发出过任何主动消息。
+**现象**：workspace_a 陪伴机器人自部署以来从未发出过任何主动消息。
 
 **诊断结果**（服务器日志）：
 ```
-restored tasks app_id=xh_yibu count=0
+restored tasks app_id=workspace_a count=0
 ```
 
 三个 task YAML 文件存在于 workspace，但没有任何任务被注册进 scheduler。
@@ -38,9 +38,9 @@ restored tasks app_id=xh_yibu count=0
 
 ### 根因 1：`app_id` 字段语义歧义（已修复 D1）
 
-Task YAML 文件里有 `app_id` 字段，init 脚本用 `__FEISHU_APP_ID__` 占位符替换，填入飞书 App ID（`cli_a95d2eb715391bdf`）。
+Task YAML 文件里有 `app_id` 字段，init 脚本用 `__FEISHU_APP_ID__` 占位符替换，填入飞书 App ID（`cli_xxx`）。
 
-但 `restoreEnabledTasks()` 和 `runner.go` 中 `appRegistry` 的查找键是 workspace ID（`xh_yibu`），两者不一致，导致 DB 里的任务永远查不到。
+但 `restoreEnabledTasks()` 和 `runner.go` 中 `appRegistry` 的查找键是 workspace ID（`workspace_a`），两者不一致，导致 DB 里的任务永远查不到。
 
 **本质**：`AppConfig.ID`（workspace ID）和 `AppConfig.FeishuAppID`（飞书 App ID）是两个不同字段，字段名 `app_id` 存在歧义，init 脚本做了"正确的错误替换"。
 
@@ -82,10 +82,10 @@ runner 设计假设：所有任务执行后的文字输出都应发给用户。�
 
 **两个次级原因**：
 
-1. **SKILL.md 的"静默退出"约束的是 bash 脚本，不约束 Claude 的文字输出**  
+1. **SKILL.md 的"静默退出"约束的是 bash 脚本，不约束 Claude 的文字输出**
    `exit 0` 是 bash 层面的退出，Claude 在执行脚本前已经可能输出了执行摘要。runner 拿到这段文字就发给了用户。
 
-2. **proactive 决定"不发"时的文字输出同样被发出**  
+2. **proactive 决定"不发"时的文字输出同样被发出**
    proactive SKILL.md 里有多个 `exit 0` 路径表示"本次静默"，但 Claude 可能先输出"当前距上次对话不足4小时，静默"，这段说明被 runner 当消息发出。
 
 ### 根因 5：`removeTask` 用文件名查 DB，与实际存储的 task ID 不一致（v1.1 新增）
@@ -97,7 +97,7 @@ id := strings.TrimSuffix(base, ".yaml") // "proactive_reach"
 w.removeTask(id) // 按此 id 查 DB
 ```
 
-但 DB 里的 `task.ID` 来自 YAML 的 `id` 字段，模板写的是 `__APP_ID__-proactive`，替换后为 `xh_yibu-proactive`。两者不一致，删除文件时 scheduler 里的 job 永远无法被正确移除。
+但 DB 里的 `task.ID` 来自 YAML 的 `id` 字段，模板写的是 `__APP_ID__-proactive`，替换后为 `workspace_a-proactive`。两者不一致，删除文件时 scheduler 里的 job 永远无法被正确移除。
 
 ---
 
@@ -177,7 +177,7 @@ workspaces/_companion/
 
 实例 workspace：
 ```
-/root/xh_yibu/
+/srv/workspaces/workspace-a/
 ├── tasks/                          ← fsnotify 监听，只放完整可用的文件
 └── .claude/
     └── task_templates/             ← init 脚本复制（含占位符），Claude 阶段二读取
@@ -217,7 +217,7 @@ workspaces/_companion/
 1. 读取当前会话目录下的 SESSION_CONTEXT.md：
    - 找到 `Channel key` 字段，格式为 `type:id:app_id`
    - target_type = 第一段（如 `p2p`）
-   - target_id = 第二段（如 `oc_98f5f925b82266ee81716ed91b519917`）
+   - target_id = 第二段（如 `oc_xxx`）
 
 2. 读取 {workspace_dir}/.claude/task_templates/ 目录下所有 yaml 文件。
    对每个文件：将 __TARGET_TYPE__ 替换为 target_type，__TARGET_ID__ 替换为 target_id。
@@ -247,7 +247,7 @@ if ty.AppID != "" && ty.AppID != appID {
 
 ### 4.5 统一 task ID 为文件名（修复 removeTask bug）
 
-**问题**：`removeTask` 用文件名（`proactive_reach`）查 DB，但 DB 里存的是 YAML `id` 字段的值（`xh_yibu-proactive`），永远找不到。
+**问题**：`removeTask` 用文件名（`proactive_reach`）查 DB，但 DB 里存的是 YAML `id` 字段的值（`workspace_a-proactive`），永远找不到。
 
 **修复方案**：`LoadYAML` 中 task ID 始终从文件名派生，不使用 YAML 里的 `id` 字段：
 
@@ -398,7 +398,7 @@ initialization_status = done
 | D1：路径推导 appID | — | ✅ 已完成 | `watcher.go`, `runner.go`, `models.go`, `main.go` |
 | D2：占位符检测 + 必填校验 | — | ✅ 已完成 | `runner.go` |
 | D3：0 任务 WARN | — | ✅ 已完成 | `main.go` |
-| 修复现有实例 xh_yibu 等的 app_id + target | — | ✅ 已完成（手动修复）| yaml 文件 |
+| 修复现有实例 workspace_a 等的 app_id + target | — | ✅ 已完成（手动修复）| yaml 文件 |
 | **模板目录重构 + init 脚本（原子）** | **P1** | ⬜ 待实施 | `_companion/`, init 脚本 |
 | **removeTask id 统一为文件名** | **P1** | ⬜ 待实施 | `runner.go`, 模板文件 |
 | **send_output 字段 + runner.go** | **P1** | ⬜ 待实施 | `models.go`, `runner.go`, 模板文件 |

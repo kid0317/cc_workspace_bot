@@ -11,7 +11,7 @@
 #   feishu-app-secret 飞书 App Secret
 #
 # Example:
-#   ./init_workspace.sh my-bot ./workspaces/my-bot cli_abc123 secretxxx
+#   ./init_workspace.sh my-bot ./workspaces/my-bot cli_your_app_id your_app_secret
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ usage() {
     echo "  feishu-app-secret 飞书 App Secret"
     echo ""
     echo "Example:"
-    echo "  $0 investment-assistant /root/investment cli_abc123 secretXXX"
+    echo "  $0 investment-assistant ./workspaces/investment cli_your_app_id your_app_secret"
     exit 1
 }
 

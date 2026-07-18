@@ -336,7 +336,7 @@ func (r *Runner) getOrCreateSession(channelKey, appID, createdBy string, appCfg 
 var placeholderRe = regexp.MustCompile(`__[A-Z_]+__`)
 
 // LoadYAML reads a task YAML file and returns a model.Task.
-// appID is the workspace ID derived from the file path (e.g. "xh_yibu");
+// appID is the workspace ID derived from the file path (e.g. "workspace_a");
 // it overrides whatever app_id the YAML contains, preventing mismatches between
 // the Feishu App ID and the workspace ID.
 //

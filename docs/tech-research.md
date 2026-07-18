@@ -42,7 +42,7 @@ wsClient.Start(context.Background()) // 阻塞
 
 | `ChatType` | 含义 | channel_key 格式 |
 |---|---|---|
-| `p2p` | 私聊 | `p2p:{open_id}:{app_id}` |
+| `p2p` | 私聊 | `p2p:{chat_id}:{app_id}` |
 | `group` | 群聊 | `group:{chat_id}:{app_id}` |
 | `topic` / `topic_group` | 话题群 | `thread:{chat_id}:{thread_id}:{app_id}` |
 

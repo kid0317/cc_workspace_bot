@@ -3,7 +3,7 @@
 backfill_orphan_sessions.py — 修补 migrate_db.py 漏掉的 orphan sessions。
 
 背景：原 migrate_db.py 用 `channels.app_id` 作为分流依据，但实际 chat 数据是
-按 `sessions.channel_key` 末段后缀（如 `:mango_daxian`）路由的。`channels`
+按 `sessions.channel_key` 末段后缀（如 `:workspace_a`）路由的。`channels`
 表只存了 bot 自己的身份（每 app 通常 1 行），导致绝大多数 sessions 在
 channels 表里没有对应行，被 migrate_db.py 直接跳过。
 
@@ -16,10 +16,10 @@ channels 表里没有对应行，被 migrate_db.py 直接跳过。
 
 用法：
     python3 backfill_orphan_sessions.py \
-        --src /root/cc_workspace_bot/bot.db.bak \
-        --config /root/cc_workspace_bot/config.yaml \
+        --src ./bot.db.bak \
+        --config ./config.yaml \
         [--dry-run]              # 只打印不写入
-        [--app mango_daxian]     # 只跑单个 app（调试用）
+        [--app workspace_a]      # 只跑单个 app（调试用）
 
 输出：每个 app 的统计 + 总览。目标 DB 在写入前会备份到 bot.db.pre-backfill.bak。
 """
@@ -46,8 +46,11 @@ def load_config(config_path: str) -> dict[str, str]:
     }
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def parse_channel_key(channel_key: str) -> tuple[str, str, str] | None:
-    """`p2p:oc_xxx:mango_daxian` -> ('p2p', 'oc_xxx', 'mango_daxian')。"""
+    """`p2p:oc_xxx:workspace_a` -> ('p2p', 'oc_xxx', 'workspace_a')。"""
     parts = channel_key.split(":")
     if len(parts) < 3:
         return None
@@ -203,8 +206,8 @@ def backfill_app(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", default="/root/cc_workspace_bot/bot.db.bak")
-    parser.add_argument("--config", default="/root/cc_workspace_bot/config.yaml")
+    parser.add_argument("--src", default=str(REPO_ROOT / "bot.db.bak"))
+    parser.add_argument("--config", default=str(REPO_ROOT / "config.yaml"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--app", default="", help="只跑单个 app（调试用）")
     args = parser.parse_args()

@@ -40,10 +40,10 @@ func IsResumeRecoverable(s string) bool {
 
 // cwdToProjectDir converts a cwd path to the corresponding ~/.claude/projects
 // directory. Claude CLI flattens the absolute cwd by replacing each '/' and
-// '_' with '-'. Example: /root/xh_yibu/sessions/abc → -root-xh-yibu-sessions-abc.
+// '_' with '-'. Example: /home/dev/workspace_a/sessions/abc -> -home-dev-workspace-a-sessions-abc.
 //
-// Limitation: the flatten rule is non-injective. Paths like /root/foo/sessions
-// and /root/foo_sessions both flatten to "-root-foo-sessions". Two workspaces
+// Limitation: the flatten rule is non-injective. Paths like /home/dev/foo/sessions
+// and /home/dev/foo_sessions both flatten to "-home-dev-foo-sessions". Two workspaces
 // whose flat names collide will share the same project directory in
 // ~/.claude/projects/. This is a Claude CLI namespace property, not introduced
 // here — the upstream resume mechanism has the same collision. Workspace dirs
@@ -210,10 +210,10 @@ func referencesAnyToolUseID(rec map[string]any, ids map[string]struct{}) bool {
 // jsonlLine is a parsed-or-raw row from a session jsonl, annotated with the
 // action computed by analyzeJSONL.
 type jsonlLine struct {
-	raw     []byte          // original bytes (without trailing newline)
-	rec     map[string]any  // parsed record, nil for empty/non-JSON lines
-	drop    bool            // remove the line entirely
-	rewrite []byte          // when non-nil and !drop, replaces raw on output
+	raw     []byte         // original bytes (without trailing newline)
+	rec     map[string]any // parsed record, nil for empty/non-JSON lines
+	drop    bool           // remove the line entirely
+	rewrite []byte         // when non-nil and !drop, replaces raw on output
 }
 
 // SanitizeStats summarises what analyzeJSONL would do (or did) to a file.

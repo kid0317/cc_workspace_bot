@@ -63,8 +63,8 @@ if [[ "$APPLY_ALL" == "true" ]]; then
 elif [[ -n "$TARGET_WS" ]]; then
     if [[ -d "$TARGET_WS" ]]; then
         WORKSPACES="$TARGET_WS"
-    elif [[ -d "/root/$TARGET_WS" ]]; then
-        WORKSPACES="/root/$TARGET_WS"
+    elif [[ -d "$HOME/$TARGET_WS" ]]; then
+        WORKSPACES="$HOME/$TARGET_WS"
     else
         err "workspace 不存在：$TARGET_WS"; exit 1
     fi

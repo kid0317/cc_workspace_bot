@@ -3,8 +3,8 @@
 migrate_db.py — 将共享 bot.db 拆分为每个 App 的独立数据库。
 
 用法:
-    python3 migrate_db.py --src /root/cc_workspace_bot/bot.db \
-                          --config /root/cc_workspace_bot/config.yaml \
+    python3 migrate_db.py --src ./bot.db \
+                          --config ./config.yaml \
                           [--dry-run]   # 只打印不写入
                           [--force]     # 目标 DB 已存在时强制覆盖（危险）
 
@@ -28,6 +28,9 @@ from pathlib import Path
 from datetime import datetime
 
 import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 # ── Schema (mirrors GORM AutoMigrate output) ─────────────────────────────────
@@ -250,11 +253,11 @@ def verify(dst_path: str, expected: dict) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Migrate shared bot.db to per-workspace DBs")
-    parser.add_argument("--src", default="/root/cc_workspace_bot/bot.db", help="Source shared DB path")
-    parser.add_argument("--config", default="/root/cc_workspace_bot/config.yaml", help="config.yaml path")
+    parser.add_argument("--src", default=str(REPO_ROOT / "bot.db"), help="Source shared DB path")
+    parser.add_argument("--config", default=str(REPO_ROOT / "config.yaml"), help="config.yaml path")
     parser.add_argument("--dry-run", action="store_true", help="Preview only, no writes")
     parser.add_argument("--force", action="store_true", help="Overwrite existing target DBs")
-    parser.add_argument("--archive-dir", default="/root/cc_workspace_bot", help="Dir for unknown-app-id archives")
+    parser.add_argument("--archive-dir", default=str(REPO_ROOT), help="Dir for unknown-app-id archives")
     args = parser.parse_args()
 
     print(f"[migrate_db] {'DRY RUN — ' if args.dry_run else ''}starting {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

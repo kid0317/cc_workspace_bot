@@ -1,8 +1,8 @@
 apps:
   - id: "product-assistant"
-    feishu_app_id: "cli_xxx"
-    feishu_app_secret: "xxx"
-    feishu_verification_token: "xxx"
+    feishu_app_id: "cli_your_feishu_app_id"
+    feishu_app_secret: "your_feishu_app_secret"
+    feishu_verification_token: ""
     feishu_encrypt_key: ""
     workspace_dir: "./workspaces/product-assistant"
     # workspace_mode: "work"      # 工作类（默认）：先发 thinking 卡片再更新结果
@@ -21,9 +21,9 @@ apps:
                                    # 仅在 anthropic 供应商下生效，其他供应商自动忽略
 
   # - id: "code-review"
-  #   feishu_app_id: "cli_yyy"
-  #   feishu_app_secret: "yyy"
-  #   feishu_verification_token: "yyy"
+  #   feishu_app_id: "cli_your_second_feishu_app_id"
+  #   feishu_app_secret: "your_second_feishu_app_secret"
+  #   feishu_verification_token: ""
   #   feishu_encrypt_key: ""
   #   workspace_dir: "./workspaces/code-review"
   #   allowed_chats:
@@ -49,7 +49,7 @@ claude:
       # effort: "medium"              # 默认 effort：low/medium/high/xhigh/max（可选，仅 anthropic 支持）
     # bailian:                        # 阿里云百炼平台
     #   base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
-    #   auth_token: "sk-your-dashscope-api-key"
+    #   auth_token: "your_dashscope_api_key"
     #   model: "qwen-plus"            # 百炼默认模型
 
 session:

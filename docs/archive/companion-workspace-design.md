@@ -1,7 +1,7 @@
 # Companion Workspace 设计文档
 
-> ⚠️ **已过期（DEPRECATED）**  
-> 本文档为 2026-04-09 的初始设计草稿，已被 [`companion-workspace-spec.md`](./companion-workspace-spec.md) 取代。  
+> ⚠️ **已过期（DEPRECATED）**
+> 本文档为 2026-04-09 的初始设计草稿，已被 [`companion-workspace-spec.md`](./companion-workspace-spec.md) 取代。
 > 请勿基于本文档做开发决策，仅供历史参考。
 >
 > ---
@@ -564,7 +564,7 @@ Companion Workspace 是**独立模板**，位于 `workspaces/_companion/`，**�
 ./init_companion_workspace.sh <app-id> <workspace-dir> <feishu-app-id> <feishu-app-secret>
 
 # 示例
-./init_companion_workspace.sh aria-companion /root/aria cli_xxx secretxxx
+./init_companion_workspace.sh aria-companion /srv/workspaces/aria cli_xxx secretxxx
 ```
 
 内部逻辑与 `init_workspace.sh` 基本一致，关键差异：

@@ -18,8 +18,8 @@ import (
 // (e.g. every companion workspace has "proactive_reach.yaml"). Two legacy formats
 // are handled:
 //
-//   - Bare slug:      "proactive_reach"          → "xh_yibu/proactive_reach"
-//   - Dotted prefix:  "ycm_mate.proactive_reach" → "ycm_mate/proactive_reach"
+//   - Bare slug:      "proactive_reach"          → "workspace_a/proactive_reach"
+//   - Dotted prefix:  "workspace_b.proactive_reach" → "workspace_b/proactive_reach"
 //
 // All other IDs (UUIDs, semantic names) that lack a "/" are also migrated:
 //
@@ -59,7 +59,7 @@ func migrateTaskIDsForDB(appID string, appDB *gorm.DB) {
 
 			// Derive the slug: strip the legacy "appID." dot-prefix if present.
 			// This handles the transitional format created by the short-lived
-			// TaskFileID function (e.g. "ycm_mate.proactive_reach").
+			// TaskFileID function (e.g. "workspace_b.proactive_reach").
 			slug := t.ID
 			if dotPrefix := t.AppID + "."; strings.HasPrefix(slug, dotPrefix) {
 				slug = strings.TrimPrefix(slug, dotPrefix)

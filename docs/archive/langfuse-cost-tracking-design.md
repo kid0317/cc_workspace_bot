@@ -1,7 +1,7 @@
 # Langfuse 成本统计 设计文档
 
 > 状态：设计稿，未实施
-> 范围：`/root/.claude/hooks/langfuse_hook.py`、Langfuse 模型注册、`langfuse_query.py`
+> 范围：`$HOME/.claude/hooks/langfuse_hook.py`、Langfuse 模型注册、`langfuse_query.py`
 > 依赖：自托管 Langfuse v4（http://localhost:3000）、langfuse-sdk 4.2+
 
 ---
@@ -10,7 +10,7 @@
 
 ### 1.1 当前实现概览
 
-每次 `claude` CLI 子进程结束时（`Stop` hook），`/root/.claude/hooks/langfuse_hook.py` 增量读取 Claude Code 的 transcript JSONL，按"用户输入 → 全部助手回复 → 工具结果"分组成 **turn**，向 Langfuse emit：
+每次 `claude` CLI 子进程结束时（`Stop` hook），`$HOME/.claude/hooks/langfuse_hook.py` 增量读取 Claude Code 的 transcript JSONL，按"用户输入 → 全部助手回复 → 工具结果"分组成 **turn**，向 Langfuse emit：
 
 ```
 Trace (claude-code turn N)
@@ -203,7 +203,7 @@ Langfuse trace（一个 turn 一个 trace）
 
 ### 5.2 hook 改造
 
-文件：`/root/.claude/hooks/langfuse_hook.py`
+文件：`$HOME/.claude/hooks/langfuse_hook.py`
 
 #### 5.2.1 数据结构
 
@@ -491,7 +491,7 @@ CC_LF_META_VERSION=1
 ```
 INPUT:
   --since 2026-04-01
-  --workspace-glob '/root/cc_workspace_bot/workspaces/*/sessions/*'
+  --workspace-glob '/srv/cc-workspace-bot/workspaces/*/sessions/*'
   --dry-run
 
 PIPELINE（与 hook 共用 _build_turns / _normalize_usage / _emit_turn 模块）:
@@ -531,8 +531,8 @@ PIPELINE（与 hook 共用 _build_turns / _normalize_usage / _emit_turn 模块�
 
 ```json
 "hooks": {
-  "Stop":         [{"hooks":[{"type":"command","command":"python3 /root/.claude/hooks/langfuse_hook.py"}]}],
-  "SubagentStop": [{"hooks":[{"type":"command","command":"python3 /root/.claude/hooks/langfuse_hook.py"}]}]
+  "Stop":         [{"hooks":[{"type":"command","command":"python3 $HOME/.claude/hooks/langfuse_hook.py"}]}],
+  "SubagentStop": [{"hooks":[{"type":"command","command":"python3 $HOME/.claude/hooks/langfuse_hook.py"}]}]
 }
 ```
 

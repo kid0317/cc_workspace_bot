@@ -621,7 +621,7 @@ func buildSettingsJSON(providerName string, pc config.ProviderConfig) string {
 // SubagentStop hook. Returns nil when the request is malformed (missing
 // AppConfig or SessionID) so the hook will skip emit rather than mis-attribute.
 //
-// Design ref: docs/langfuse-cost-tracking-design.md §5.2.5.
+// Design ref: docs/archive/langfuse-cost-tracking-design.md §5.2.5.
 func buildLangfuseEnvVars(req *ExecuteRequest, taskName string) []string {
 	if req == nil || req.AppConfig == nil || req.SessionID == "" {
 		return nil

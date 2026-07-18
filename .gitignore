@@ -8,6 +8,7 @@ config.bailian.yaml
 
 # ── Compiled Binaries ─────────────────────────────────────────────────────────
 /server
+/filelock
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 bot.db
@@ -17,6 +18,7 @@ server.pid
 *.log
 *.log.*
 *.log.wf
+deploy_restart.sh
 
 # ── Python test cache ─────────────────────────────────────────────────────────
 .pytest_cache/
@@ -41,6 +43,7 @@ workspaces/*/memory/
 workspaces/*/tasks/
 # Temp attachment downloads
 workspaces/*/tmp/
+workspaces/*/tmp_file/
 # flock lock file
 workspaces/*/.memory.lock
 

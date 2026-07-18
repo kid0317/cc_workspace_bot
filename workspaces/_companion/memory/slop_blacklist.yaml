@@ -20,7 +20,7 @@ universal_slop:
   - 泪水在眼眶里打转
 
 self_imposed_slop:
-  # 我们自己埋在模板里的 slop（mango_daxian 2026-04-20 复盘识别）
+  # 我们自己埋在模板里的 slop（companion_demo 2026-04-20 复盘识别）
   # ⚠️ 运行时：先过 voice_whitelist，若角色有"（停顿）"作声音标志，此条豁免
   - text: "（停顿）"
     severity: low       # 仅在未被白名单保护时命中

@@ -589,7 +589,7 @@ flock -u 9; exec 9>&-
 3. 对每个模板进行占位符替换：
    - `__TARGET_TYPE__` → 从 channel_key 解析的第一段（如 `p2p`）
    - `__TARGET_ID__` → 从 channel_key 解析的第二段（如 `oc_xxx`）
-   - `__WORKSPACE_DIR__` → SESSION_CONTEXT.md 中的 workspace_dir 绝对路径（如 `/root/xh_yibu`）
+   - `__WORKSPACE_DIR__` → SESSION_CONTEXT.md 中的 workspace_dir 绝对路径（如 `/srv/workspaces/workspace-a`）
 
 4. 在写入前验证：所有文件都不应包含 `__[A-Z_]+__` 形式的占位符，否则停止写入并报告错误
 

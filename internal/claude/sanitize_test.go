@@ -201,11 +201,11 @@ func TestSanitizeResumeForCwd_MissingFileNotAnError(t *testing.T) {
 }
 
 func TestCwdToProjectDir(t *testing.T) {
-	got, err := cwdToProjectDir("/root/xh_yibu/sessions/06c69765")
+	got, err := cwdToProjectDir("/home/dev/workspace_a/sessions/06c69765")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if !strings.HasSuffix(got, "/.claude/projects/-root-xh-yibu-sessions-06c69765") {
+	if !strings.HasSuffix(got, "/.claude/projects/-home-dev-workspace-a-sessions-06c69765") {
 		t.Fatalf("unexpected path: %s", got)
 	}
 }

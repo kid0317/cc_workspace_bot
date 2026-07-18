@@ -41,7 +41,7 @@ python3 "$SCRIPT" --mode traces --limit 10 --hours 24
 
 输出示例：
 ```
-=== Langfuse Traces  [workspace: /root/workspaces/yzk_worker] ===
+=== Langfuse Traces  [workspace: /srv/workspaces/product-assistant] ===
 过去 24h，共 5 条 trace
 
 ────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ observations (8 条):
         input  : "帮我查今天的任务完成情况"
         output : "已完成以下任务..."
      [04-11 09:30:11] [tool] Tool: Read
-        input  : {"file_path": "/root/workspaces/.../memory/MEMORY.md"}
+        input  : {"file_path": "/srv/workspaces/.../memory/MEMORY.md"}
 ```
 
 #### 4. 查某个 session 的所有 traces
@@ -120,7 +120,7 @@ python3 "$SCRIPT" --mode observations --trace-id abc123def456789a
   "env": {
     "TRACE_TO_LANGFUSE": "true",
     "LANGFUSE_PUBLIC_KEY": "pk-lf-cc-workspace-bot-local",
-    "LANGFUSE_SECRET_KEY": "sk-lf-cc-workspace-bot-local",
+    "LANGFUSE_SECRET_KEY": "your_langfuse_secret_key",
     "LANGFUSE_BASE_URL": "http://localhost:3000"
   }
 }

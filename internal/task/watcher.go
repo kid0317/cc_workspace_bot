@@ -124,7 +124,7 @@ func (w *Watcher) Close() {
 }
 
 // AddDir registers a tasks/ directory to watch.
-// appID is the workspace ID (e.g. "xh_yibu") — it is injected into every
+// appID is the workspace ID (e.g. "workspace_a") — it is injected into every
 // task loaded from this directory, overriding whatever app_id the YAML contains.
 // This eliminates the class of bugs where a YAML file stores the wrong app_id.
 func (w *Watcher) AddDir(dir string, appID string) error {
