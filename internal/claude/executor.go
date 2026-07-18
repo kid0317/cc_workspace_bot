@@ -159,7 +159,7 @@ func (e *Executor) executeOnce(ctx context.Context, req *ExecuteRequest) (*Execu
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
-	if err := writeSessionContext(sessionDir, req, e.cfg.DBPath); err != nil {
+	if err := writeSessionContext(sessionDir, req, req.AppConfig.DBPath); err != nil {
 		return nil, fmt.Errorf("write session context: %w", err)
 	}
 
@@ -621,7 +621,7 @@ func buildSettingsJSON(providerName string, pc config.ProviderConfig) string {
 // SubagentStop hook. Returns nil when the request is malformed (missing
 // AppConfig or SessionID) so the hook will skip emit rather than mis-attribute.
 //
-// Design ref: docs/langfuse-cost-tracking-design.md §5.2.5.
+// Design ref: docs/archive/langfuse-cost-tracking-design.md §5.2.5.
 func buildLangfuseEnvVars(req *ExecuteRequest, taskName string) []string {
 	if req == nil || req.AppConfig == nil || req.SessionID == "" {
 		return nil

@@ -8,8 +8,16 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	dbpkg "github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
+
+// migrTestReg wraps a single *gorm.DB into a Registry for migration tests.
+// The appID key is arbitrary — migrateTaskIDsForDB only uses it for logging;
+// the actual task rename logic reads t.AppID from the DB row.
+func migrTestReg(gdb *gorm.DB) *dbpkg.Registry {
+	return dbpkg.NewRegistryFromMap(map[string]*gorm.DB{"test": gdb})
+}
 
 // openTestDB creates an in-memory SQLite DB with the tasks table auto-migrated.
 func openTestDB(t *testing.T) *gorm.DB {
@@ -56,32 +64,32 @@ func taskExists(db *gorm.DB, id string) bool {
 func TestMigrateTaskIDs_EmptyDB(t *testing.T) {
 	db := openTestDB(t)
 	// Should be a no-op — no panic, no error.
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 }
 
 func TestMigrateTaskIDs_AlreadyMigrated(t *testing.T) {
 	db := openTestDB(t)
-	seedTask(t, db, "xh_yibu/proactive_reach", "xh_yibu")
+	seedTask(t, db, "workspace_a/proactive_reach", "workspace_a")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	// Row must still exist under the same ID.
-	if !taskExists(db, "xh_yibu/proactive_reach") {
+	if !taskExists(db, "workspace_a/proactive_reach") {
 		t.Error("already-migrated row was removed or renamed")
 	}
 }
 
 func TestMigrateTaskIDs_BareName(t *testing.T) {
 	db := openTestDB(t)
-	seedTask(t, db, "proactive_reach", "xh_yibu")
+	seedTask(t, db, "proactive_reach", "workspace_a")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "proactive_reach") {
 		t.Error("legacy bare-name row should have been renamed")
 	}
-	if !taskExists(db, "xh_yibu/proactive_reach") {
-		t.Error("migrated row xh_yibu/proactive_reach not found")
+	if !taskExists(db, "workspace_a/proactive_reach") {
+		t.Error("migrated row workspace_a/proactive_reach not found")
 	}
 }
 
@@ -89,7 +97,7 @@ func TestMigrateTaskIDs_UUIDFilename(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "1ff20d20-4469-4346-8e96-3dda5d71c123", "investment")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "1ff20d20-4469-4346-8e96-3dda5d71c123") {
 		t.Error("legacy UUID row should have been renamed")
@@ -100,21 +108,21 @@ func TestMigrateTaskIDs_UUIDFilename(t *testing.T) {
 }
 
 func TestMigrateTaskIDs_LegacyDotPrefix(t *testing.T) {
-	// The transitional TaskFileID function created IDs like "ycm_mate.proactive_reach".
-	// Migration must produce "ycm_mate/proactive_reach", not "ycm_mate/ycm_mate.proactive_reach".
+	// The transitional TaskFileID function created IDs like "workspace_b.proactive_reach".
+	// Migration must produce "workspace_b/proactive_reach", not "workspace_b/workspace_b.proactive_reach".
 	db := openTestDB(t)
-	seedTask(t, db, "ycm_mate.proactive_reach", "ycm_mate")
+	seedTask(t, db, "workspace_b.proactive_reach", "workspace_b")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
-	if taskExists(db, "ycm_mate.proactive_reach") {
+	if taskExists(db, "workspace_b.proactive_reach") {
 		t.Error("legacy dotted-prefix row should have been renamed")
 	}
-	if taskExists(db, "ycm_mate/ycm_mate.proactive_reach") {
+	if taskExists(db, "workspace_b/workspace_b.proactive_reach") {
 		t.Error("double-namespaced ID must not be created")
 	}
-	if !taskExists(db, "ycm_mate/proactive_reach") {
-		t.Error("migrated row ycm_mate/proactive_reach not found")
+	if !taskExists(db, "workspace_b/proactive_reach") {
+		t.Error("migrated row workspace_b/proactive_reach not found")
 	}
 }
 
@@ -122,15 +130,15 @@ func TestMigrateTaskIDs_ConflictDropsLegacy(t *testing.T) {
 	// Both the legacy and canonical rows exist. Migration should drop the legacy row
 	// and leave the canonical one untouched.
 	db := openTestDB(t)
-	seedTask(t, db, "proactive_reach", "xh_yibu")
-	seedTask(t, db, "xh_yibu/proactive_reach", "xh_yibu")
+	seedTask(t, db, "proactive_reach", "workspace_a")
+	seedTask(t, db, "workspace_a/proactive_reach", "workspace_a")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if taskExists(db, "proactive_reach") {
 		t.Error("stale legacy row should have been deleted on conflict")
 	}
-	if !taskExists(db, "xh_yibu/proactive_reach") {
+	if !taskExists(db, "workspace_a/proactive_reach") {
 		t.Error("canonical row must survive conflict resolution")
 	}
 }
@@ -140,7 +148,7 @@ func TestMigrateTaskIDs_EmptyAppID(t *testing.T) {
 	db := openTestDB(t)
 	seedTask(t, db, "orphan_task", "")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
 	if !taskExists(db, "orphan_task") {
 		t.Error("row with empty app_id should be left untouched")
@@ -150,15 +158,15 @@ func TestMigrateTaskIDs_EmptyAppID(t *testing.T) {
 func TestMigrateTaskIDs_Idempotent(t *testing.T) {
 	// Running the migration twice must produce the same result.
 	db := openTestDB(t)
-	seedTask(t, db, "life_sim", "xh_yibu")
+	seedTask(t, db, "life_sim", "workspace_a")
 
-	MigrateTaskIDs(db)
-	MigrateTaskIDs(db) // second run
+	MigrateTaskIDs(migrTestReg(db))
+	MigrateTaskIDs(migrTestReg(db)) // second run
 
 	if taskExists(db, "life_sim") {
 		t.Error("legacy row should be gone after second run")
 	}
-	if !taskExists(db, "xh_yibu/life_sim") {
+	if !taskExists(db, "workspace_a/life_sim") {
 		t.Error("canonical row should exist after second run")
 	}
 }
@@ -168,14 +176,14 @@ func TestMigrateTaskIDs_MultipleWorkspaces(t *testing.T) {
 	db := openTestDB(t)
 	// Simulate the state before the fix: only one row exists (last writer won).
 	// After migration both get their correct namespaced IDs — but since there is
-	// only one legacy row, only xh_yibu gets migrated here. The ycm_mate row would
+	// only one legacy row, only workspace_a gets migrated here. The workspace_b row would
 	// be created fresh by the watcher on the next fsnotify event.
-	seedTask(t, db, "proactive_reach", "xh_yibu")
+	seedTask(t, db, "proactive_reach", "workspace_a")
 
-	MigrateTaskIDs(db)
+	MigrateTaskIDs(migrTestReg(db))
 
-	if !taskExists(db, "xh_yibu/proactive_reach") {
-		t.Error("xh_yibu/proactive_reach should exist after migration")
+	if !taskExists(db, "workspace_a/proactive_reach") {
+		t.Error("workspace_a/proactive_reach should exist after migration")
 	}
 	if taskExists(db, "proactive_reach") {
 		t.Error("bare proactive_reach should be gone after migration")

@@ -151,7 +151,7 @@ func TestLoadYAML_IDNamespaced(t *testing.T) {
 		wantID   string
 	}{
 		// Semantic name: companion template task
-		{"proactive_reach.yaml", "xh_yibu", "xh_yibu/proactive_reach"},
+		{"proactive_reach.yaml", "workspace_a", "workspace_a/proactive_reach"},
 		// UUID filename: Claude-generated task
 		{"1ff20d20-4469-4346-8e96-3dda5d71c123.yaml", "investment", "investment/1ff20d20-4469-4346-8e96-3dda5d71c123"},
 		// Slug with hyphens
@@ -577,8 +577,8 @@ func TestSystemTaskSlug(t *testing.T) {
 		taskID string
 		want   string
 	}{
-		{"mango_daxian/calibrate_params", "calibrate_params"},
-		{"xh_yibu/memory_distill", "memory_distill"},
+		{"companion_demo/calibrate_params", "calibrate_params"},
+		{"workspace_a/memory_distill", "memory_distill"},
 		{"no-slash-fallback", "no-slash-fallback"},
 		{"nested/slashes/deepest", "deepest"},
 	}

@@ -14,9 +14,6 @@ type Config struct {
 	Claude  ClaudeConfig  `mapstructure:"claude"`
 	Session SessionConfig `mapstructure:"session"`
 	Cleanup CleanupConfig `mapstructure:"cleanup"`
-	// DBPath is the absolute path to bot.db, set at runtime after db.Open().
-	// Not read from YAML.
-	DBPath string `mapstructure:"-"`
 }
 
 // AppConfig represents one Feishu application + its workspace.
@@ -35,6 +32,9 @@ type AppConfig struct {
 	WorkspaceMode string          `mapstructure:"workspace_mode"`
 	AllowedChats  []string        `mapstructure:"allowed_chats"`
 	Claude        AppClaudeConfig `mapstructure:"claude"`
+	// DBPath is set at runtime by db.NewRegistry to the absolute path of this
+	// app's bot.db. Not read from YAML.
+	DBPath string `mapstructure:"-"`
 }
 
 // IsCompanion reports whether this workspace uses companion (no-card) mode.

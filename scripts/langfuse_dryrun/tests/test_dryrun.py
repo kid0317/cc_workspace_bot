@@ -19,16 +19,16 @@ EXPECTED = FIXTURES / "expected"
 class TestSubagentPathDetection:
     def test_main_transcript(self):
         assert not dryrun.is_subagent_path(
-            "/root/.claude/projects/foo/abc123.jsonl")
+            "/home/dev/.claude/projects/foo/abc123.jsonl")
 
     def test_subagent_transcript(self):
         assert dryrun.is_subagent_path(
-            "/root/.claude/projects/foo/abc123/subagents/agent-xyz.jsonl")
+            "/home/dev/.claude/projects/foo/abc123/subagents/agent-xyz.jsonl")
 
     def test_subagent_compact(self):
         # acompact-prefixed sub-agent files (compaction agents)
         assert dryrun.is_subagent_path(
-            "/root/.claude/projects/foo/sid/subagents/agent-acompact-1234.jsonl")
+            "/home/dev/.claude/projects/foo/sid/subagents/agent-acompact-1234.jsonl")
 
 
 # ── fixture-based gates ─────────────────────────────────────────────────────

@@ -55,6 +55,10 @@ type Worker struct {
 	// When the next text message arrives, these are prepended to form a
 	// combined prompt before sending to Claude.
 	pendingAttachmentPrompts []string
+
+	// canary detects silent death of the companion output-filter hook.
+	// Nil-safe: applyOutputFilter tolerates a nil canary (tests).
+	canary *filterCanary
 }
 
 func newWorker(
@@ -76,6 +80,7 @@ func newWorker(
 		segmentOpts: DefaultSegmentOptions(),
 		queue:       make(chan *feishu.IncomingMessage, 64),
 		stopCh:      make(chan struct{}),
+		canary:      newFilterCanary(canaryThreshold),
 	}
 }
 
@@ -176,7 +181,7 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	// Cache attachment-only messages and reply with a prompt for description.
 	if isAttachmentOnly(msg.Prompt) {
 		w.pendingAttachmentPrompts = append(w.pendingAttachmentPrompts, msg.Prompt)
-		reply := attachmentReplyText(msg.Prompt)
+		reply := attachmentAckText(w.appCfg.IsCompanion(), msg.Prompt)
 		if _, err := w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, reply); err != nil {
 			slog.Error("send attachment ack", "err", err)
 		}
@@ -194,6 +199,7 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 	if !w.appCfg.IsCompanion() {
 		cardMsgID = w.sendThinkingCard(ctx, msg)
 	}
+	execStart := time.Now() // freshness reference for FINAL_REPLY.md (companion filter)
 	result, err := w.runClaude(ctx, sess, msg)
 	if err != nil {
 		w.replyError(ctx, msg, cardMsgID, err)
@@ -213,6 +219,14 @@ func (w *Worker) process(ctx context.Context, msg *feishu.IncomingMessage) {
 			slog.Info("companion hook blocked message, discarding silently", "channel", w.channelKey)
 		}
 		return
+	}
+
+	// Companion output filter: replace the raw text with the Stop-hook
+	// filtered reply BEFORE persisting, so DB / RECENT_HISTORY / sending all
+	// see the same cleaned text (blocks the dirty-history self-pollution
+	// loop). Work mode is untouched — no file stat, no behavior change.
+	if w.appCfg.IsCompanion() {
+		result.Text = w.applyOutputFilter(result.Text, sess.ID, execStart)
 	}
 
 	w.persistResult(sess, result)
@@ -427,7 +441,7 @@ func (w *Worker) handleNew(ctx context.Context, msg *feishu.IncomingMessage) {
 		slog.Error("create new session", "err", err)
 	}
 
-	_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, "✅ 已开启新会话")
+	_, _ = w.senderIface.SendText(ctx, msg.ReceiveID, msg.ReceiveType, newSessionReceipt(w.appCfg.IsCompanion()))
 }
 
 // getOrCreateSession returns the active session for this channel, creating one if needed.

@@ -304,6 +304,75 @@ class TestBuildTurns:
         assert call.usage["input"] == 4   # NOT 0
         assert call.usage["output"] > 0
 
+    def test_tool_result_string_content_attached(self):
+        rows = [
+            _user_row("Q", uuid="user1"),
+            _row("u1", "msg_A", "req_1", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"f": "x"}}]),
+            _tool_result_row("t1", "file contents here"),
+        ]
+        turns = parse.build_turns(rows)
+        tc = turns[0].llm_calls[0].tool_calls[0]
+        assert tc.output == "file contents here"
+
+    def test_tool_result_block_list_content_joined(self):
+        # tool_result content can be a list of {type:text, text:...} blocks
+        rows = [
+            _user_row("Q", uuid="user1"),
+            _row("u1", "msg_A", "req_1", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]),
+            {
+                "type": "user", "uuid": "u_tr",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "t1",
+                    "content": [{"type": "text", "text": "part1"}, {"type": "text", "text": "part2"}],
+                }]},
+            },
+        ]
+        turns = parse.build_turns(rows)
+        assert turns[0].llm_calls[0].tool_calls[0].output == "part1\npart2"
+
+    def test_tool_result_is_error_preserved(self):
+        rows = [
+            _user_row("Q", uuid="user1"),
+            _row("u1", "msg_A", "req_1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
+            {
+                "type": "user", "uuid": "u_tr",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "t1",
+                    "content": "boom", "is_error": True,
+                }]},
+            },
+        ]
+        turns = parse.build_turns(rows)
+        out = turns[0].llm_calls[0].tool_calls[0].output
+        assert out is not None and "boom" in out and "error" in out.lower()
+
+    def test_missing_tool_result_leaves_output_none(self):
+        rows = [
+            _user_row("Q", uuid="user1"),
+            _row("u1", "msg_A", "req_1", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]),
+        ]
+        turns = parse.build_turns(rows)
+        assert turns[0].llm_calls[0].tool_calls[0].output is None
+
+    def test_multiple_tool_results_attached_by_id(self):
+        rows = [
+            _user_row("Q", uuid="user1"),
+            _row("u1", "msg_A", "req_1", [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}},
+            ]),
+            {
+                "type": "user", "uuid": "u_tr",
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t2", "content": "out2"},
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "out1"},
+                ]},
+            },
+        ]
+        turns = parse.build_turns(rows)
+        tcs = {tc.id: tc.output for tc in turns[0].llm_calls[0].tool_calls}
+        assert tcs == {"t1": "out1", "t2": "out2"}
+
     def test_synthetic_model_skipped(self):
         rows = [
             _user_row("Q", uuid="user1"),

@@ -1,6 +1,6 @@
 """Business metadata loading: env vars first, sidecar fallback.
 
-Design ref: docs/langfuse-cost-tracking-design.md §5.2.5.
+Design ref: docs/archive/langfuse-cost-tracking-design.md §5.2.5.
 Env vars are fork-frozen on the claude subprocess so they're immune to
 file races. The sidecar exists only for OOB usage (e.g. backfill, manual
 testing).

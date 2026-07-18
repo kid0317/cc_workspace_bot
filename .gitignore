@@ -8,14 +8,17 @@ config.bailian.yaml
 
 # ── Compiled Binaries ─────────────────────────────────────────────────────────
 /server
+/filelock
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 bot.db
+bot.db.*
 nohup.out
 server.pid
 *.log
 *.log.*
 *.log.wf
+deploy_restart.sh
 
 # ── Python test cache ─────────────────────────────────────────────────────────
 .pytest_cache/
@@ -28,6 +31,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# ── feishu_ops local doc cache (runtime) ──────────────────────────────────────
+**/feishu_ops/index/
+
 # ── Workspace Runtime Data ────────────────────────────────────────────────────
 # Session directories contain user conversation data
 workspaces/*/sessions/
@@ -37,6 +43,7 @@ workspaces/*/memory/
 workspaces/*/tasks/
 # Temp attachment downloads
 workspaces/*/tmp/
+workspaces/*/tmp_file/
 # flock lock file
 workspaces/*/.memory.lock
 

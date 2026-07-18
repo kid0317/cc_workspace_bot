@@ -1,6 +1,6 @@
 """State file: per-(framework_session, claude_session, transcript) byte offsets.
 
-Design ref: docs/langfuse-cost-tracking-design.md §5.4.
+Design ref: docs/archive/langfuse-cost-tracking-design.md §5.4.
 - Three-element keying so /new rotation cannot reuse stale offset.
 - flock around save() to prevent concurrent-hook offset stomp.
 - Atomic write via .tmp + rename.

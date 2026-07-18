@@ -1,7 +1,7 @@
 # Companion Workspace 完整规格文档
 
-> 版本：v1.0（2026-04-12）  
-> 状态：**现行规格（权威文档）**  
+> 版本：v1.0（2026-04-12）
+> 状态：**现行规格（权威文档）**
 > 取代：`companion-workspace-design.md`（设计草稿，已过期）、`companion-task-init-design.md`（任务初始化专项，已过期）
 
 ---
@@ -110,7 +110,7 @@ time.Now().Format("2006-01-02")   // "2026-04-12"
 time.Now().Format("2006-01-02 15:04")  // "2026-04-12 14:35"
 ```
 
-字段名同步改为 `Current datetime`（原为 `Current date`）。  
+字段名同步改为 `Current datetime`（原为 `Current date`）。
 **目的**：支持时间流逝感知功能（计算距上次对话间隔分钟数）。
 
 #### models.go / runner.go

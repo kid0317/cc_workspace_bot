@@ -149,8 +149,8 @@ func TestCleaner_CleanApp(t *testing.T) {
 			}
 
 			c := &Cleaner{
-				db:   database,
-				apps: []config.AppConfig{appCfg},
+				dbReg: db.NewRegistryFromMap(map[string]*gorm.DB{"test-app": database}),
+				apps:  []config.AppConfig{appCfg},
 				cfg: config.CleanupConfig{
 					AttachmentsRetentionDays: retentionDays,
 					AttachmentsMaxDays:       maxDays,
@@ -196,9 +196,9 @@ func TestCleaner_Run_MultipleApps(t *testing.T) {
 	}
 
 	c := &Cleaner{
-		db:   database,
-		apps: apps,
-		cfg:  config.CleanupConfig{AttachmentsRetentionDays: 7, AttachmentsMaxDays: 30},
+		dbReg: db.NewRegistryFromMap(map[string]*gorm.DB{"app1": database, "app2": database}),
+		apps:  apps,
+		cfg:   config.CleanupConfig{AttachmentsRetentionDays: 7, AttachmentsMaxDays: 30},
 	}
 	c.Run()
 
@@ -223,9 +223,9 @@ func TestCleaner_CleanApp_WrongApp(t *testing.T) {
 
 	appCfg := config.AppConfig{ID: "my-app", WorkspaceDir: workspaceDir}
 	c := &Cleaner{
-		db:   database,
-		apps: []config.AppConfig{appCfg},
-		cfg:  config.CleanupConfig{AttachmentsRetentionDays: 7, AttachmentsMaxDays: 30},
+		dbReg: db.NewRegistryFromMap(map[string]*gorm.DB{"my-app": database}),
+		apps:  []config.AppConfig{appCfg},
+		cfg:   config.CleanupConfig{AttachmentsRetentionDays: 7, AttachmentsMaxDays: 30},
 	}
 
 	got := c.cleanApp(&appCfg, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))

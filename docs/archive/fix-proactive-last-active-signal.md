@@ -76,7 +76,7 @@ echo "### [E000] $(date +%Y-%m-%dT%H:%M) · last_active" >> "$EVENTS_FILE"
 echo "### [E000P] $(date +%Y-%m-%dT%H:%M) · proactive_sent" >> "$EVENTS_FILE"
 ```
 
-优点：保留了 proactive 发送记录，便于调试。  
+优点：保留了 proactive 发送记录，便于调试。
 缺点：增加了一个新标记需要维护，且 Step 1 无需改动但增加了概念负担。
 
 ---

@@ -1,7 +1,7 @@
 """创建飞书文档（Docx）——只接受本地 Markdown 文件，带 sha256 上传缓存。
 
 用法：
-    python create_doc.py --file_path /root/course/path/to/report.md [--title "标题"] \
+    python create_doc.py --file_path "$WORKSPACE_DIR/path/to/report.md" [--title "标题"] \
         [--folder_token <token>] [--no-cache]
 
 行为：

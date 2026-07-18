@@ -94,7 +94,7 @@ def detect_capabilities(persona_text: str, workspace_name: str = '') -> dict:
 
     Args:
         persona_text: persona.md 全文
-        workspace_name: workspace 目录名（如 "ycm_mate"），用于后缀类提示
+        workspace_name: workspace 目录名（如 "companion_demo"），用于后缀类提示
     """
     caps = {}
 

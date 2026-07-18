@@ -47,16 +47,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Database ──────────────────────────────────────────────────
-	database, err := db.Open("bot.db")
-	if err != nil {
-		slog.Error("open database", "err", err)
-		os.Exit(1)
-	}
-	if absDB, err := filepath.Abs("bot.db"); err == nil {
-		cfg.DBPath = absDB
-	}
-
 	// ── Workspace init ────────────────────────────────────────────
 	templateDir := filepath.Join("workspaces", "_template")
 	for _, appCfg := range cfg.Apps {
@@ -66,6 +56,17 @@ func main() {
 		}
 		slog.Info("workspace ready", "app", appCfg.ID, "dir", appCfg.WorkspaceDir)
 	}
+
+	// ── Database (per-workspace) ──────────────────────────────────
+	// Each app gets its own bot.db under its workspace_dir.
+	// db.NewRegistry also sets app.DBPath on each AppConfig so that
+	// executor.writeSessionContext writes the correct per-app path.
+	registry, err := db.NewRegistry(cfg.Apps)
+	if err != nil {
+		slog.Error("init db registry", "err", err)
+		os.Exit(1)
+	}
+	defer registry.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -93,7 +94,7 @@ func main() {
 	}
 
 	// ── Session manager ───────────────────────────────────────────
-	sessionMgr := session.NewManager(cfg, database, executor, senders)
+	sessionMgr := session.NewManager(cfg, registry, executor, senders)
 	// Store BEFORE launching any goroutine (Go memory model guarantees visibility
 	// across go statements; atomic.Store documents the ordering intent).
 	fwd.target.Store(sessionMgr)
@@ -101,14 +102,14 @@ func main() {
 	// ── Task subsystem ─────────────────────────────────────────────
 	// sessionMgr is passed as ChannelArchiver so tasks with post_archive=true
 	// (e.g. companion daily_handoff) can rotate sessions without a user /new.
-	taskRunner := task.NewRunner(cfg, database, executor, senders, sessionMgr)
+	taskRunner := task.NewRunner(cfg, registry, executor, senders, sessionMgr)
 	taskScheduler, err := task.NewScheduler(taskRunner)
 	if err != nil {
 		slog.Error("create task scheduler", "err", err)
 		os.Exit(1)
 	}
 
-	taskWatcher, err := task.NewWatcher(taskScheduler, database)
+	taskWatcher, err := task.NewWatcher(taskScheduler, registry)
 	if err != nil {
 		slog.Error("create task watcher", "err", err)
 		os.Exit(1)
@@ -116,7 +117,7 @@ func main() {
 
 	// Migrate legacy task IDs to the canonical "app_id/slug" format.
 	// Must run before restoreEnabledTasks so that restored records use new IDs.
-	task.MigrateTaskIDs(database)
+	task.MigrateTaskIDs(registry)
 
 	for _, appCfg := range cfg.Apps {
 		tasksDir := filepath.Join(appCfg.WorkspaceDir, "tasks")
@@ -126,10 +127,15 @@ func main() {
 			slog.Error("watch tasks dir", "dir", tasksDir, "err", err)
 			os.Exit(1)
 		}
-		restoreEnabledTasks(ctx, database, appCfg.ID, tasksDir, taskScheduler)
+		appDB, err := registry.Get(appCfg.ID)
+		if err != nil {
+			slog.Error("get db for restore tasks", "app", appCfg.ID, "err", err)
+			os.Exit(1)
+		}
+		restoreEnabledTasks(ctx, appDB, appCfg.ID, tasksDir, taskScheduler)
 	}
 
-	if _, err := task.NewCleaner(database, cfg.Apps, cfg.Cleanup, taskScheduler); err != nil {
+	if _, err := task.NewCleaner(registry, cfg.Apps, cfg.Cleanup, taskScheduler); err != nil {
 		slog.Error("register cleanup job", "err", err)
 		os.Exit(1)
 	}
@@ -210,7 +216,7 @@ func (f *dispatchForwarder) Dispatch(ctx context.Context, msg *feishu.IncomingMe
 }
 
 // syncAppChannels is intentionally a no-op: channel records are created on first message.
-func syncAppChannels(_ *gorm.DB, _ *config.AppConfig) {}
+func syncAppChannels(_ *config.AppConfig) {}
 
 // logTaskParseSummary prints a one-line summary per workspace of how many
 // tasks/*.yaml files parsed cleanly vs. failed. Failed files are listed with

@@ -1,105 +1,104 @@
-# 需求文档
+# 需求分析文档
 
-> 状态: 已实现
-> 最后更新: 2026-03-05
+> 状态：开源版整理
+> 最后更新：2026-07-18
 
-## 项目定位
+## 1. 背景
 
-企业级内部工具。通过飞书为每个团队或业务场景建立专属 AI 助理应用，每个应用背后对应一个 Claude Code workspace 目录，支持场景化的长记忆、技能和工具配置。
+很多团队已经把 Claude Code 用作本地开发和知识工作工具，但默认交互入口仍然是终端。终端适合开发者，不适合团队成员在移动端、群聊、定时提醒和知识沉淀场景中使用。
 
----
+本项目把飞书作为统一入口，把每个飞书应用映射到一个独立 Claude Code workspace。用户在飞书发消息，服务在本机或内网服务器中调用 `claude` CLI，结果再回到飞书。
 
-## 核心模块
+## 2. 目标用户
 
-### 1. 应用（Application）
-
-- 每个飞书应用对应一个业务场景（如"产品助手"、"代码审查助手"）
-- 每个应用绑定一个本地 **workspace 目录**，目录内包含：
-  - `CLAUDE.md` — 场景指令和上下文
-  - `skills/` — 该场景的自定义 skill 文件
-  - `memory/` — 长期记忆文件
-  - 工具配置、规范等
-- 应用是消息路由的第一层：飞书群/单聊 → 路由到对应应用 → 路由到对应 workspace
-- **实现**：`internal/config/config.go`（AppConfig），`cmd/server/main.go` 多 WS 客户端
-
-### 2. 会话管理（Session Management）
-
-#### 会话映射规则
-
-| 飞书渠道 | channel_key 格式 | 支持 /new |
-|---|---|---|
-| 单聊（P2P） | `p2p:{open_id}:{app_id}` | ✅ |
-| 普通群聊 | `group:{chat_id}:{app_id}` | ✅ |
-| 话题群（Thread Group）| `thread:{chat_id}:{thread_id}:{app_id}` | ❌ |
-
-- `/new` 命令：归档当前 session（`status = archived`），创建新 session，清空 `claude_session_id`
-- **实现**：`internal/session/worker.go`（handleNew）、`internal/model/models.go`（Session）
-
-#### 两层记录
-
-| 层级 | 内容 | 实现 |
-|---|---|---|
-| Session 层 | 用户侧对话记录（Messages 表） | `internal/model/models.go` |
-| Context 层 | Claude 执行的 message context | claude CLI `--resume <claude_session_id>` |
-
-### 3. 消息路由与执行
-
-**实现流程：**
-```
-飞书 WS 事件（P2MessageReceiveV1）
-  → feishu.Receiver.handleMessage()
-  → 解析消息类型（text / image / file / post）
-  → 下载附件 → 保存 tmp → moveAttachments 移入 session/attachments/
-  → session.Manager.Dispatch()
-  → session.Worker 队列（channel_key 串行）
-  → claude.Executor.Execute()（子进程 claude CLI，stream-json）
-  → feishu.Sender.UpdateCard()
-```
-
-**关键约束（已实现）：**
-- 同一 channel_key 的消息严格串行处理（Worker 队列 + goroutine）
-- 不同 channel 并发处理（sync.Map）
-- 飞书 **WebSocket 长连接模式**（larkws，免公网 IP）
-
-### 4. 默认 Workspace 初始化配置
-
-新建应用时，框架从 `workspaces/_template/` 自动复制：
-
-- `CLAUDE.md` — 默认 AI 指令（群聊静默策略 / 绝对路径规范）
-- `skills/feishu.md` — 飞书操作说明
-- `skills/memory.md` — 长记忆读写规范（含 flock 指南）
-- `skills/task.md` — 定时任务 YAML 格式规范
-
-**实现**：`internal/workspace/init.go`（Init + copyTemplate，跳过 symlink）
-
-### 5. 后台任务机制（Background Task）
-
-- 用户通过对话创建定时任务（claude 调用 task skill 写 YAML）
-- YAML 文件格式含：id / app_id / cron / target_type / target_id / prompt / enabled
-- `fsnotify` 监听 `tasks/` 目录变更 → 同步 DB + 注册/注销 gocron Job
-- Cron 表达式在 `LoadYAML` 时校验（`robfig/cron/v3`）
-- 框架启动时全量扫描 DB 恢复 enabled 任务
-- **实现**：`internal/task/`（watcher.go + scheduler.go + runner.go）
-
-### 6. 消息队列与顺序执行
-
-- 每个 channel_key 维护一个独立 goroutine（Worker）和缓冲队列（深度 64）
-- 同一 channel 的消息严格串行处理
-- Worker 空闲 30 分钟自动退出，session 归档，下次消息到达时重新创建
-- 执行超时：通过 `context.WithTimeout` 控制（默认 5 分钟）
-- **实现**：`internal/session/manager.go` + `internal/session/worker.go`
-
----
-
-## 非功能需求（已确认实现）
-
-| 需求 | 实现方案 |
+| 用户 | 诉求 |
 |---|---|
-| 部署方式 | 单机，单进程，SQLite WAL |
-| 数据持久化 | SQLite（`github.com/glebarez/sqlite` CGO-free）|
-| Claude 调用方式 | 子进程调用 `claude` CLI（`--output-format stream-json`）|
-| 多应用权限隔离 | `allowed_chats` 白名单（每 app 独立配置）|
-| 任务调度 | 单机 gocron/v2，非分布式 |
-| 优雅关闭 | `sessionMgr.Wait()` 等待所有 worker 完成 |
-| HTTP 安全 | ReadTimeout / WriteTimeout / IdleTimeout 均已设置 |
-| 附件安全 | 100 MiB 写入上限（`io.LimitReader`）|
+| 开发者 | 在手机或群聊中触发代码阅读、修改、测试、文档生成 |
+| 团队负责人 | 为不同业务线配置不同 AI 助理，并控制可访问群聊 |
+| 运营 / 产品人员 | 使用飞书文档、表格、定时任务和长期记忆完成日常工作 |
+| 个人用户 | 构建学习、研究、生活记录或陪伴型助手 |
+
+## 3. 核心问题
+
+1. 飞书消息如何稳定路由到正确 workspace。
+2. 同一聊天里的多条消息如何串行处理，避免 Claude 并发写同一目录。
+3. 每个应用如何隔离配置、记忆、任务、附件和数据库。
+4. 如何让任务型助手用卡片反馈进度，让陪伴型助手保持自然文本体验。
+5. 私有凭证、运行时数据、用户记忆如何与可公开源码分离。
+
+## 4. 功能需求
+
+### 4.1 多应用配置
+
+- 系统从 `config.yaml` 读取多个 app。
+- 每个 app 至少包含 `id`、飞书 App ID / Secret、`workspace_dir`。
+- 每个 app 可配置 `allowed_chats` 白名单。
+- 每个 app 可覆盖 Claude provider、model、effort 和 allowed tools。
+
+### 4.2 飞书消息接入
+
+- 使用飞书 WebSocket 长连接接收事件。
+- 支持单聊、普通群聊、话题群。
+- 支持文本、图片、文件、富文本消息。
+- 机器人入群、用户入群、首次打开单聊时可发送欢迎消息。
+
+### 4.3 会话管理
+
+- `channel_key` 是队列和 session 的稳定键。
+- 同一 `channel_key` 串行执行。
+- 不同 `channel_key` 可并发执行。
+- `/new` 归档当前 session 并创建新 session。
+- Worker 空闲超时后退出，但保留 session 数据。
+
+### 4.4 Claude 执行
+
+- 每次执行都在 `workspace/sessions/<session-id>/` 下运行。
+- work 模式复用 `claude_session_id` 以恢复上下文。
+- companion 模式每轮新建 Claude 会话，通过 hooks 注入最近历史。
+- 子进程超时、输出解析、stderr 收集和进程组清理必须可控。
+- 对第三方 provider 污染的 resume JSONL 做一次自动清理和重试。
+
+### 4.5 附件处理
+
+- 图片和文件先下载到临时目录，再移动到 session 的 `attachments/`。
+- 传给 Claude 的 prompt 中只包含本地绝对路径引用。
+- 纯附件消息先缓存，下一条文字消息到达后合并处理。
+- 附件写入大小上限为 100 MiB。
+
+### 4.6 定时任务
+
+- `tasks/*.yaml` 是任务 source of truth。
+- 文件创建、修改、删除后自动同步 DB 和 gocron job。
+- 启动时恢复 enabled 任务。
+- 定时任务默认不复用旧 Claude context。
+- 支持系统任务、用户回复任务和借用用户 channel 的后台任务。
+
+### 4.7 数据持久化
+
+- 每个 app 使用独立 SQLite `bot.db`，路径位于对应 workspace 下。
+- DB 保存 channel、session、message、task 的运行时镜像。
+- YAML 任务文件仍是任务配置真源。
+
+## 5. 非功能需求
+
+| 类别 | 需求 |
+|---|---|
+| 安全 | 私有配置和运行时数据不得进入 git；workspace cwd 不允许逃逸 |
+| 可运维 | 支持健康检查、日志、优雅关闭、后台脚本启动 |
+| 可测试 | 核心纯函数和边界逻辑有 Go 单测 |
+| 可迁移 | 模板和配置文件有公开 `.template` 版本 |
+| 易用性 | README 提供从克隆到启动的完整中文教程 |
+
+## 6. 非目标
+
+- 不提供公网 SaaS 托管。
+- 不实现多节点分布式调度。
+- 不内置用户管理后台。
+- 不把生产密钥、真实 workspace 记忆或真实聊天数据作为开源样例。
+
+## 7. 验收标准
+
+- 新开发者能按 README 复制模板、填写飞书配置、启动服务。
+- `go build ./...`、`go test ./... -cover`、`go vet ./...` 可通过。
+- `git ls-files` 中不包含私有 `config.yaml`、真实 `feishu.json`、DB、日志、session、memory、tasks。
+- docs 目录下存在需求分析、PRD、概要设计、详细设计和开源审计文档。

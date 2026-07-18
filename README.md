@@ -1,991 +1,288 @@
 # CC Workspace Bot
 
-> 企业级飞书 AI 助理平台，基于 Claude Code CLI 构建的多场景智能助手框架。
-> 个人微信: bmagician ,欢迎添加讨论.
+CC Workspace Bot 是一个面向企业内部和个人团队的飞书 AI 助理框架。它把飞书消息路由到不同的 Claude Code workspace，让每个飞书应用拥有独立的提示词、技能、长期记忆、定时任务和会话数据。
 
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
-[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
-[![SQLite](https://img.shields.io/badge/Database-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
+适合这些场景：
 
----
+- 在飞书里使用自己的编程、研究、运营、学习助理
+- 为不同业务线部署相互隔离的 AI 助手
+- 在内网机器上运行，无需公网 Webhook
+- 让 Claude Code 通过受控 workspace 读写文件、执行脚本、调用飞书文档和表格能力
 
-## 目录
+## 核心能力
 
-- [项目简介](#项目简介)
-- [核心特性](#核心特性)
-- [架构概览](#架构概览)
-- [实战案例](#实战案例)
-  - [投资助理：持仓分析 + 交易纪律执行](#案例一投资助理持仓分析--交易纪律执行)
-  - [个人学习助理：交互式学习 + 知识沉淀](#案例二个人学习助理交互式学习--知识沉淀)
-  - [随身编程助手：从电脑前解放](#案例三随身编程助手从电脑前解放)
-  - [饮食管理：热量追踪 + 营养分析 + 定期报告](#案例四饮食管理热量追踪--营养分析--定期报告)
-- [前置要求](#前置要求)
-- [快速开始](#快速开始)
-  - [安装 Git](#安装-git)
-  - [安装 Go 环境](#安装-go-环境)
-  - [安装](#安装)
-  - [配置](#配置)
-  - [初始化 Workspace](#初始化-workspace)
-  - [启动服务](#启动服务)
-- [使用指南](#使用指南)
-  - [基本对话](#基本对话)
-  - [命令参考](#命令参考)
-  - [定时任务](#定时任务)
-  - [自定义 Workspace](#自定义-workspace)
-- [配置参考](#配置参考)
-- [项目结构](#项目结构)
-- [技术栈](#技术栈)
-- [开发指南](#开发指南)
-- [文档](#文档)
-- [许可证](#许可证)
-
----
-
-## 项目简介
-
-**CC Workspace Bot** 是一套企业内部飞书 AI 助理平台。每个业务场景（如投资助理、产品助手、代码评审机器人）对应一个飞书应用和一个独立的 Claude Code workspace 目录。用户在飞书发送消息，框架路由到对应 workspace 执行 `claude` CLI，通过交互式卡片返回结果。
-
-**解决的核心问题**：
-
-- 同一套代码支撑多个完全隔离的 AI 助理场景，互不干扰
-- 每个助理拥有独立的长期记忆、自定义技能、工作模式和定时任务
-- 无需公网 IP，通过飞书 WebSocket 长连接实现企业内网安全部署
-- Claude Code 的工具能力（读写文件、执行命令、调用 API）与飞书完整集成
-
----
-
-## 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| **多应用隔离** | 每个飞书应用对应独立 workspace，session 级目录隔离并发写操作 |
-| **智能会话管理** | 单聊 / 群聊 / 话题群，自动维护 Claude context，`/new` 开启新会话 |
-| **双模式回复** | `work` 模式（卡片交互，适合任务场景）/ `companion` 模式（纯文本对话，适合陪伴场景）|
-| **欢迎引导** | Bot 入群、用户加入群组、首次打开单聊时自动发送欢迎卡片介绍助手能力 |
-| **长期记忆** | 跨 session 共享记忆，filelock 工具保障跨平台并发安全 |
-| **定时任务** | 对话式创建 cron 任务，fsnotify 自动注册，YAML 为 source of truth |
-| **多模型支持** | Anthropic 原生 + 百炼桥接（Kimi/Qwen 等），支持 per-app 模型选择 |
-| **附件支持** | 图片、文件自动下载至 session 目录；纯附件消息智能缓存，等待用户描述意图后合并发送 |
-| **飞书全集成** | 发消息、读写文档/表格/多维表格、管理日历、查询群成员（18 个 Python 脚本）|
-| **事件记录** | 结构化记录具体事件（cases），支持按时间检索历史案例 |
-| **WS 长连接** | 无需公网 IP，企业内网直接部署 |
-| **成本观测** | Langfuse 集成，支持 token 用量追踪和成本分析（设计阶段）|
-
----
+| 能力 | 说明 |
+|---|---|
+| 多应用隔离 | 一个 `config.yaml` 可配置多个飞书应用，每个应用绑定独立 workspace |
+| 飞书 WebSocket 接入 | 使用飞书长连接模式接收消息，本机只需能访问公网 |
+| 会话队列 | 每个 `channel_key` 一个串行 Worker，避免同一聊天内并发互相污染 |
+| Claude Code 执行 | 子进程调用 `claude -p`，支持 `--cwd`、`--resume`、模型供应商覆盖和工具白名单 |
+| 工作 / 陪伴双模式 | `work` 模式使用交互卡片，`companion` 模式直接发送文本 |
+| 附件处理 | 飞书图片和文件下载到当前 session 的 `attachments/` 后交给 Claude 读取 |
+| 长消息分段 | 超过飞书消息限制时自动切分发送 |
+| 定时任务 | workspace 的 `tasks/*.yaml` 是 source of truth，fsnotify + gocron 自动注册 |
+| 长期记忆 | workspace 的 `memory/` 目录由技能和 flock 约束管理 |
+| 可选观测 | 可通过 Claude Code hooks 接入自托管 Langfuse 记录成本和 trace |
 
 ## 架构概览
 
-```
+```text
 飞书用户
-  ↓ 发送消息（文本 / 图片 / 文件）或触发入群/单聊事件
-飞书 WebSocket 长连接
-  ↓ 事件推送（消息 / 欢迎事件）
-消息路由器（解析消息类型 + 下载附件到 TempDir）
-  ↓ 欢迎事件（Bot 入群 / 用户入群 / P2P 首次打开）→ 直接发卡片
-  ↓ 普通消息：按 channel_key 分发到对应队列
-Session Worker（每个 channel_key 对应一个串行队列）
-  ↓ moveAttachments() → 发送「思考中」卡片
-Claude Executor
-  ↓ 写入 SESSION_CONTEXT.md → prepend routing_key/sender_id → 启动子进程
-claude CLI（cmd.Dir = sessions/<session-id>/，--resume 复用 context）
-  ↓ stream-json 输出
-飞书 Sender（PATCH 卡片为最终结果）
+  -> 飞书 WebSocket 事件
+  -> feishu.Receiver 解析消息、下载附件、构造 channel_key
+  -> session.Manager 按 channel_key 懒启动 Worker
+  -> session.Worker 串行处理、管理 /new、记录消息
+  -> claude.Executor 在 workspace/sessions/<session-id>/ 调用 claude CLI
+  -> feishu.Sender 发送文本或更新交互卡片
+
+tasks/*.yaml
+  -> task.Watcher 监听变更
+  -> task.Scheduler 注册 cron
+  -> task.Runner 定时调用 claude CLI 并按配置发送结果
 ```
 
-### channel_key 格式
+详细设计见 [概要设计](docs/high-level-design.md) 和 [详细设计](docs/detailed-design.md)。
 
-| 飞书渠道 | channel_key 格式 | 支持 /new |
-|---------|-----------------|----------|
-| 单聊（P2P） | `p2p:{chat_id}:{app_id}` | ✅ |
-| 群聊 | `group:{chat_id}:{app_id}` | ✅ |
-| 话题群 | `thread:{chat_id}:{thread_id}:{app_id}` | ❌ |
+## 开源安全边界
 
-> P2P 的 `chat_id` 是飞书的会话 ID，不是用户的 `open_id`。
+仓库可以公开的内容包括 Go 源码、workspace 模板、脚本源码、测试 fixture、中文产品文档和安全模板。
 
-更多架构细节见 [设计文档](docs/design.md)。
+不要提交这些内容：
 
----
+- `config.yaml`、`config.bailian.yaml`、`config.yaml.bak*`、`config.yaml.no_sonnet`
+- `bot.db`、`bot.db.*`、workspace 下的 `bot.db`
+- `workspaces/<app>/memory/`、`sessions/`、`tasks/`、`tmp/`、`tmp_file/`
+- 任意 `.claude/skills/feishu_ops/feishu.json`
+- `.claude/settings.local.json` 等本机权限配置
+- 运行日志、pid 文件、编译产物
 
-## 实战案例
+已提供可公开模板：
 
-### 案例一：投资助理——持仓分析 + 交易纪律执行
+- [config.yaml.template](config.yaml.template)
+- [config.bailian.yaml.template](config.bailian.yaml.template)
+- [feishu.json.template](workspaces/_template/.claude/skills/feishu_ops/feishu.json.template)
 
-**场景**：A 股 / 港股散户投资者，持有多只个股，经常在冲动下想追涨杀跌，希望有一个客观的「第二意见」来帮助执行纪律。
-
-**配置思路**：
-
-1. 创建一个专属 workspace（`investment-assistant`），在 `CLAUDE.md` 中定义角色为「个人投资顾问，严格客观，不迎合情绪」
-2. 让助手自行安装 [akshare](https://github.com/akfamily/akshare) 及行情工具：
-
-```
-用户：帮我安装 akshare，并写一个 skill，能查询股票实时行情、K线数据和资金流向
-助手：好的，我来安装依赖并创建 skill...
-     （Claude 执行 pip install akshare，在 .claude/skills/ 下创建 stock_data/ 目录和对应脚本）
-助手：✅ 已安装完成。现在可以通过「查询 600519 的行情」直接获取数据。
-```
-
-3. 创建定时任务，每个交易日收盘后自动推送持仓分析：
-
-```
-用户：每个工作日 15:30 帮我分析一下持仓情况，重点看今日涨跌幅、资金流向和技术形态，有没有需要操作的建议发到我私聊
-助手：好的，我来创建这个定时任务...
-     （Claude 写入 tasks/<uuid>.yaml，cron: "30 15 * * 1-5"）
-助手：✅ 已创建「每日收盘持仓分析」任务，将在每个工作日 15:30 自动推送。
-```
-
-4. **交易纪律执行**——在任何想操作的冲动来临时，先找助手聊：
-
-```
-用户：比亚迪今天跌了 5%，我想趁低加仓，你觉得呢？
-助手：我来看一下当前数据...
-     （调用 akshare 查询 K 线、资金流向、大盘情绪）
-     从技术面看，比亚迪目前处于下降通道，今日主力资金净流出 3.2 亿，
-     跌停板附近有支撑但尚未确认。结合你当前仓位已达 35%，
-     建议等待量能缩减后的反弹信号再考虑加仓，而非追跌。
-     你是否想看一下近 30 日的资金流向趋势？
-```
-
-**核心价值**：助手的角色记忆（`memory/user_profile.md`）中记录了你的持仓成本、风险偏好和历史操作复盘，每次对话都基于完整背景做判断，而不是给通用建议。
-
----
-
-### 案例二：个人学习助理——交互式学习 + 知识沉淀
-
-**场景**：技术人员平时收藏大量文章、论文、视频，却很少真正消化。希望把「阅读」变成「对话式学习」，并让学习记录真正沉淀为可检索的知识库。
-
-**基本流程**：
-
-```
-用户：https://arxiv.org/abs/2501.12345  帮我学习这篇关于 Agent 架构的论文
-助手：我来读取这篇论文...
-     （WebFetch 抓取内容，解析摘要、方法、实验结果）
-
-     这篇论文提出了 XXX 架构，核心创新点是...
-     【核心概念】...
-     【与现有方法对比】...
-     【实际应用启示】...
-
-     你想深入哪个部分？还是我出几道理解题来验证一下？
-```
-
-**应对无法直接抓取的页面**（付费内容、需登录的网站、动态渲染页面）：
-
-> 先在飞书桌面端或移动端浏览器中打开该页面，使用**飞书剪存**（浏览器插件）将网页保存为飞书文档，再把文档链接发给助手。助手通过 `feishu_ops` skill 直接读取飞书文档全文，无障碍处理。
-
-```
-用户：这个极客时间专栏要付费，我已经用飞书剪存存成文档了：
-     https://xxx.feishu.cn/docx/AbCd1234
-助手：我来读取这篇文档...
-     （调用 feishu_ops/scripts/read_doc.py 读取全文）
-     好的，这是关于「分布式事务」的内容，我来帮你梳理...
-```
-
-**知识沉淀**——学习记录自动写入 memory：
-
-```
-用户：把今天学到的 Agent 架构要点记下来
-助手：好的，我来整理今天的学习笔记...
-     （使用 flock 写入 memory/learning_notes.md）
-     ✅ 已记录到长期记忆。下次问起 Agent 架构时我会从这里引用。
-```
-
-**核心价值**：助手的知识库随着每次学习对话不断积累，它「知道你学过什么、哪里还有疑问」，逐渐成为真正懂你知识体系的学习伙伴，而不是每次都要从零开始。
-
----
-
-### 案例三：随身编程助手——从电脑前解放
-
-**场景**：周末外出或开会途中，在手机上用飞书就能进行代码编写、架构设计、项目推进，真正摆脱「必须坐在电脑前才能工作」的限制。
-
-**代码编写**：
-
-```
-用户：帮我在 ~/projects/myapp 里新建一个 Go HTTP handler，
-     处理 POST /api/upload，接收文件并保存到 ./uploads/ 目录，
-     返回文件 URL，注意做 MIME 类型校验只允许图片
-助手：我来创建这个 handler...
-     （Read 现有代码结构 → Write 新文件 → 符合项目风格）
-     ✅ 已创建 internal/handler/upload.go，主要逻辑：
-     - 限制 MIME 类型：image/jpeg, image/png, image/webp
-     - 文件大小上限 10 MiB（io.LimitReader）
-     - 使用 UUID 命名防止冲突
-     需要我顺手写一个单测吗？
-```
-
-**架构设计讨论**：
-
-```
-用户：我在考虑给现有的单体服务加消息队列，业务量不大，
-     主要是为了解耦异步通知（邮件 + webhook），你觉得上 Kafka 还是直接 Redis List？
-助手：对于你描述的场景，Kafka 明显过重...
-     （结合项目 memory 中记录的技术栈和团队规模给出具体建议）
-     建议用 Redis List + BLPOP 方案，理由是：
-     1. 你们已有 Redis 实例，零增量运维成本
-     2. 消息量级（<1k/day）不需要 Kafka 的分区机制
-     3. 单次 BLPOP 超时 30s，天然支持优雅停止
-     我可以直接帮你写 consumer goroutine 的骨架代码。
-```
-
-**远程执行与验证**：
-
-```
-用户：帮我跑一下项目的测试，看看刚才那个改动有没有问题
-助手：好的，我来执行测试...
-     （Bash: cd ~/projects/myapp && go test ./internal/handler/... -v）
-     ✅ 全部通过（3/3），覆盖率 87.3%。
-     upload_test.go 中有一个边界用例验证了 MIME 拒绝逻辑，测试结果符合预期。
-```
-
-**核心价值**：Claude Code 本身就是完整的编程 Agent——能读写文件、执行命令、理解项目上下文。通过飞书作为交互界面，你只需要有网络，随时随地都是你的开发环境。
-
----
-
-### 案例四：饮食管理——热量追踪 + 营养分析 + 定期报告
-
-**场景**：想系统管理日常饮食、控制热量和宏量营养素（蛋白质 / 碳水 / 脂肪），但不想打开专门 App 逐条填表，只想吃完一句话搞定记录，同时积累自己的私人食谱库。
-
-**初始化——建立个人档案**：
-
-```
-用户：初始化
-助手：这个工作空间主要用来做什么？你希望我扮演什么角色？
-用户：饮食管理助手，帮我追踪每日饮食摄入、计算营养、管理私人食谱库
-助手：好的，简单介绍一下你自己？
-用户：男，28岁，75kg，175cm，目标是增肌减脂，每日目标热量 2000 大卡，
-     蛋白质 150g，碳水 200g，脂肪 60g
-助手：（写入 memory/user_profile.md）
-     ✅ 已记录。你的 TDEE 约为 2350 大卡，目标缺口 350 大卡，
-     蛋白质优先策略，每公斤体重 2g 蛋白质目标设置合理。
-```
-
-**日常记录——一句话搞定**：
-
-```
-用户：早饭：燕麦 50g 牛奶 250ml 鸡蛋 2 个
-助手：已记录早餐 ✅
-     热量 ~485 大卡 | 蛋白质 28g | 碳水 52g | 脂肪 16g
-     今日已摄入 485 / 2000 大卡
-
-用户：午饭在外面吃的，鸡腿饭一份加个汤
-助手：已记录午餐 ✅（估算）
-     鸡腿饭（快餐）约 750 大卡 | 蛋白质 32g | 碳水 90g | 脂肪 22g
-     今日累计 1235 / 2000 大卡，蛋白质 60 / 150g，
-     下午还需补充约 90g 蛋白质，建议加一顿高蛋白小食。
-
-用户：下午茶吃了包薯片（乐事原味 50g）
-助手：已记录 ✅（注：薯片为高脂高钠零食，今日脂肪已达 82%）
-     今日累计 1516 / 2000 大卡
-```
-
-**食谱库——记录常吃的菜**：
-
-```
-用户：我今晚自己做了番茄炒蛋，两个鸡蛋两个番茄加点油盐，帮我存到食谱库
-助手：好的，我来记录这道菜的营养信息并存入食谱库...
-     （写入 memory/recipes.md）
-     ✅ 「番茄炒蛋（家常版）」已入库：
-     每份约 220 大卡 | 蛋白质 14g | 碳水 8g | 脂肪 15g
-     下次说「番茄炒蛋」我直接调用这个数据，不用重新估算。
-```
-
-**定期分析报告**——创建定时任务：
-
-```
-用户：每周日晚上 9 点给我发一份本周饮食分析，发到私聊
-助手：好的，我来创建这个定时任务...
-     （写入 tasks/<uuid>.yaml，cron: "0 21 * * 0"）
-     ✅ 已创建「每周饮食分析」任务
-```
-
-每周日自动推送的报告示例：
-
-```
-📊 本周饮食报告（3.3 - 3.9）
-
-热量完成率：92%（均值 1840 / 目标 2000 大卡）
-蛋白质：日均 118g（目标 150g，达成率 79%⚠️）
-碳水：日均 198g ✅  脂肪：日均 65g 略超
-
-📌 本周亮点
-- 连续 5 天坚持早餐高蛋白
-- 外食控制较好，未出现单日超 2500 大卡
-
-⚠️ 待改善
-- 周三、周五蛋白质严重不足（< 80g），建议在下午加一勺蛋白粉或 200g 希腊酸奶
-- 薯片、饼干等零食出现 4 次，空热量占比偏高
-
-📈 趋势
-连续两周蛋白质摄入均在目标 80% 以下，建议调整午餐选择（优先肉类主食）
-```
-
-**核心价值**：不需要下载专门 App，不需要逐条扫描条形码，说一句话助手就能估算营养并记录。食谱库越用越准，personal profile 记录了你的体重目标和偏好，每次分析都基于你的具体情况而不是通用建议。体重、体测数据也可以随手告诉助手，长期追踪进展。
-
----
+完整审计清单见 [开源发布审计](docs/open-source-audit.md)。
 
 ## 前置要求
 
-> **核心前提**：本项目运行在**已安装并登录 Claude Code 的机器**上。服务端每次处理消息时，都会在该机器上以子进程方式调用 `claude` CLI，因此 Claude Code 的安装、认证和订阅缺一不可。
+必需：
 
-**安装 Claude Code**（如尚未安装）：
+- Linux / macOS / WSL
+- Go 1.24 或更高版本
+- Claude Code CLI，且运行用户已经完成登录
+- 一个或多个飞书自建应用，开启机器人能力和 WebSocket 长连接
 
-```bash
-npm install -g @anthropic-ai/claude-code
-claude  # 首次运行，按提示完成 Anthropic 账号认证
-```
+按需安装：
 
-详见 [Claude Code 官方文档](https://docs.anthropic.com/claude-code)。
+- Python 3：仅当使用 `feishu_ops`、Langfuse dry-run 或 workspace 内 Python 技能时需要
+- `lark-cli`：仅当使用 `feishu_ops` 脚本读写飞书文档、表格、多维表格时需要
+- Docker：主服务不强依赖 Docker；如果你要本机启动 Langfuse、Redis 等外部观测或技能依赖，建议用 Docker Compose 管理
 
----
-
-| 组件 | 版本要求 | 说明 |
-|------|---------|------|
-| Claude Code | 最新版 | 服务端核心依赖，须已认证登录（`claude` 命令可用）|
-| Go | 1.23+ | 编译服务端代码 |
-| Python | 3.9+ | 飞书 ops 脚本依赖（`requests` 库）|
-| 飞书企业账号 | — | 需创建企业自建应用并开启 WS 模式 |
-
-**飞书应用所需权限**（在开放平台 → 权限管理中开通）：
-
-- `im:message:receive_v1`（接收消息）
-- `im:message`（发送消息）
-- 按需开通：`docs:doc`、`sheets:spreadsheet`、`bitable:app`、`calendar:calendar` 等
-
----
+内置 SQLite 使用本地文件，不需要单独安装数据库服务。当前核心服务也不依赖 Redis；只有自定义 workspace 技能或外部观测组件需要 Redis 时才需要启动。
 
 ## 快速开始
 
-### 安装 Git
-
-> 如果已安装 Git（`git --version` 验证），可跳过此步骤。
-
-#### macOS
+1. 克隆仓库并进入目录：
 
 ```bash
-# 方式一：Homebrew（推荐）
-brew install git
-
-# 方式二：安装 Xcode Command Line Tools（会自带 git）
-xcode-select --install
-
-# 验证
-git --version
+git clone git@github.com:kid0317/cc_workspace_bot.git
+cd cc_workspace_bot
 ```
 
-#### Linux
+2. 准备配置：
 
 ```bash
-# Ubuntu / Debian
-sudo apt update && sudo apt install -y git
-
-# Arch Linux
-sudo pacman -S git
-
-# Fedora / RHEL
-sudo dnf install -y git
-
-# 验证
-git --version
-```
-
-#### Windows
-
-**方式一：官方安装包（推荐）**
-
-1. 访问 [https://git-scm.com/download/win](https://git-scm.com/download/win)，下载并运行安装程序
-2. 安装时默认选项即可；「Default editor」可选 VS Code 或 Notepad++
-3. 安装完成后打开 **Git Bash** 验证：
-
-```bash
-git --version
-```
-
-**方式二：Winget**
-
-```powershell
-winget install Git.Git
-
-# 重新打开终端后验证
-git --version
-```
-
-> Windows 推荐使用安装 Git 时自带的 **Git Bash** 来运行项目中的 Shell 脚本（`start.sh`、`init_workspace.sh`）。
-
----
-
-### 安装 Go 环境
-
-> 如果已安装 Go 1.24+（`go version` 验证），可跳过此步骤。
-
-#### macOS
-
-**方式一：Homebrew（推荐）**
-
-```bash
-# 安装 Homebrew（如尚未安装）
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 安装 Go
-brew install go
-
-# 验证
-go version  # 应输出 go1.24.x 或更高版本
-```
-
-**方式二：官方安装包**
-
-1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.24.x.darwin-arm64.pkg`（Apple Silicon）或 `go1.24.x.darwin-amd64.pkg`（Intel）
-2. 双击 `.pkg` 文件，按向导完成安装（默认安装到 `/usr/local/go`）
-3. 打开新终端验证：
-
-```bash
-go version
-```
-
----
-
-#### Linux
-
-**方式一：官方二进制包（推荐，适用所有发行版）**
-
-```bash
-# 下载（以 amd64 为例，ARM 替换为 linux-arm64）
-curl -LO https://go.dev/dl/go1.24.8.linux-amd64.tar.gz
-
-# 解压到 /usr/local（会覆盖旧版本）
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.8.linux-amd64.tar.gz
-
-# 配置 PATH（写入 ~/.bashrc 或 ~/.zshrc）
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-source ~/.bashrc
-
-# 验证
-go version
-```
-
-**方式二：包管理器**
-
-```bash
-# Ubuntu / Debian（系统源版本可能较旧，建议用方式一）
-sudo apt update && sudo apt install -y golang-go
-
-# Arch Linux
-sudo pacman -S go
-
-# Fedora / RHEL
-sudo dnf install -y golang
-```
-
----
-
-#### Windows
-
-**方式一：官方安装包（推荐）**
-
-1. 访问 [https://go.dev/dl/](https://go.dev/dl/)，下载 `go1.24.x.windows-amd64.msi`
-2. 双击运行安装程序，一路「Next」完成安装（默认安装到 `C:\Program Files\Go`）
-3. 安装程序会自动配置 `PATH`，打开新的 PowerShell 或命令提示符验证：
-
-```powershell
-go version
-```
-
-**方式二：Scoop（包管理器）**
-
-```powershell
-# 安装 Scoop（如尚未安装）
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-irm get.scoop.sh | iex
-
-# 安装 Go
-scoop install go
-
-# 验证
-go version
-```
-
-**方式三：Winget**
-
-```powershell
-winget install GoLang.Go
-
-# 重新打开终端后验证
-go version
-```
-
-> Windows 用户建议使用 **Git Bash** 或 **WSL2**（Ubuntu）运行后续 Shell 脚本（`start.sh`、`init_workspace.sh`），PowerShell 也可直接运行 `go` 命令。项目已完全支持 Windows 平台。
-
----
-
-### 安装
-
-```bash
-# 克隆仓库
-git clone https://github.com/kid0317/cc-workspace-bot.git
-cd cc-workspace-bot
-
-# 安装 Go 依赖
-go mod download
-
-# 构建服务端二进制
-go build -o server ./cmd/server
-```
-
-### 配置
-
-```bash
-# 复制配置模板
 cp config.yaml.template config.yaml
 ```
 
-编辑 `config.yaml`，至少填写一个 app 的飞书凭证和 workspace 路径（详见[配置参考](#配置参考)）。
-
-> ⚠️ `config.yaml` 包含 App Secret，已通过 `.gitignore` 排除在 git 追踪之外，**切勿提交**。
-
-### 初始化 Workspace
-
-每个飞书应用对应一个 workspace 目录。使用初始化脚本一键完成：
-
-```bash
-./init_workspace.sh <app-id> <workspace-dir> <feishu-app-id> <feishu-app-secret>
-```
-
-**参数说明**：
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `app-id` | 唯一标识，只含字母/数字/连字符 | `investment-assistant` |
-| `workspace-dir` | workspace 目录（绝对或相对路径）| `/data/workspaces/investment` |
-| `feishu-app-id` | 飞书应用 App ID | `cli_abc123xxx` |
-| `feishu-app-secret` | 飞书应用 App Secret | `secretXXX` |
-
-**脚本执行的操作**：
-
-1. 创建目录结构（`.claude/skills/`、`memory/`、`tasks/`、`sessions/`）
-2. 将飞书凭证写入 `.claude/skills/feishu_ops/feishu.json`（权限 `0600`，不暴露给 LLM）
-3. 从 `workspaces/_template/` 复制初始文件（非破坏性，已存在的文件自动跳过）
-4. 备份 `config.yaml` 并追加新 app 配置块
-
-**示例**：
-
-```bash
-./init_workspace.sh investment-assistant \
-  /data/workspaces/investment \
-  cli_abc123 \
-  secretXXX
-```
-
-脚本执行后，需要**重启服务**使新配置生效：
-
-```bash
-./start.sh restart
-```
-
-### 启动服务
-
-**后台守护进程（推荐）**：
-
-```bash
-./start.sh start      # 启动
-./start.sh status     # 查看状态
-./start.sh stop       # 优雅停止（等待所有 worker 完成）
-./start.sh restart    # 重启
-```
-
-| 文件 | 说明 |
-|------|------|
-| `server.pid` | 进程 PID |
-| `server.log` | 标准输出日志 |
-| `server.log.wf` | 标准错误日志 |
-
-**前台运行（调试）**：
-
-```bash
-./server
-./server -config /path/to/config.yaml
-```
-
----
-
-## 使用指南
-
-### 基本对话
-
-在飞书中直接向机器人发消息即可。支持以下消息类型：
-
-- **文本**：直接处理
-- **图片**：自动下载，提供给 Claude 读取（`[图片: /abs/path/to/file.jpg]`）
-- **文件**：自动下载，提供给 Claude 读取（`[文件: /abs/path/to/file.pdf]`）
-- **富文本**：自动提取文本内容
-
-Claude 将以交互式卡片形式回复，首先显示「思考中...」，完成后一次性更新为最终结果。
-
-> **智能附件处理**：如果只发送图片/文件（不带任何文字），助手会先回复「已收到，请描述你希望我做什么」，等你发送文字说明后再合并处理。这样可以确保 AI 理解你的意图。
-
-### 命令参考
-
-| 命令 | 说明 |
-|------|------|
-| `/new` | 开启新会话：归档当前会话，清空上下文，下条消息开始全新对话 |
-
-### 定时任务
-
-通过自然语言对话创建定时任务，Claude 会自动调用 `task` skill 写入 YAML 文件，框架通过 fsnotify 自动注册到 gocron 调度器：
-
-```
-用户：每天早上 9 点帮我发一份市场简报到群里
-AI：好的，我来创建这个定时任务。
-    （Claude 写入 tasks/<uuid>.yaml）
-AI：✅ 已创建定时任务「每日市场简报」，将在每天 09:00 自动执行。
-```
-
-**任务 YAML 格式**（框架自动管理，一般无需手动编辑）：
+编辑 `config.yaml`，至少填入：
 
 ```yaml
-id: "550e8400-e29b-41d4-a716-446655440000"
-app_id: "investment-assistant"
-name: "每日市场简报"
-cron: "0 9 * * 1-5"            # 周一到周五早 9 点
-target_type: "group"            # p2p 或 group
-target_id: "oc_xxxxxxxx"        # open_id 或 chat_id
-prompt: "请生成今日市场简报"
-created_by: "ou_xxxxxxxx"
-created_at: "2026-03-01T00:00:00Z"
-enabled: true
-```
-
-删除 YAML 文件即可注销任务。
-
-### 自定义 Workspace
-
-每个 workspace 的行为完全由 `CLAUDE.md` 和 `.claude/skills/` 定义。
-
-**初始化引导**：首次使用时，向机器人发送「初始化」，助手将引导完成以下配置：
-
-1. 工作空间用途（角色定位）
-2. 用户基本信息
-3. 日常任务规划
-4. 工作模式（可选，如「分析模式 / 规划模式 / 汇报模式」）
-5. 飞书默认发送目标
-
-**长期记忆**：重要信息自动保存到 `memory/` 目录，跨 session 共享（通过 flock 文件锁保障并发安全）。
-
-**飞书操作能力**（`.claude/skills/feishu_ops/`）：
-
-| 能力 | 说明 |
-|------|------|
-| 发送消息 | 文字、富文本、图片、文件，支持私聊和群聊 |
-| 文档操作 | 创建并写入飞书文档（Markdown → 富文本转换）|
-| 电子表格 | 创建表格、导入 Excel、写入数据 |
-| 多维表格 | 创建 Bitable、定义字段、批量写入记录 |
-| 读取文档 | 读取飞书云文档 / 电子表格内容 |
-| 日历管理 | 查询 / 创建日历事件 |
-| 群成员 | 查询群聊成员列表 |
-
----
-
-## 配置参考
-
-完整的 `config.yaml` 配置说明：
-
-```yaml
-# 应用列表（支持配置多个飞书应用，每个对应一个 workspace）
 apps:
-  - id: "investment-assistant"          # 唯一标识（字母/数字/连字符）
-    feishu_app_id: "cli_xxx"            # 飞书 App ID
-    feishu_app_secret: "xxx"            # 飞书 App Secret
-    feishu_verification_token: "xxx"    # 飞书事件订阅 Verification Token
-    feishu_encrypt_key: ""              # 消息加密密钥（可选，不加密则留空）
-    workspace_dir: "/data/workspaces/investment-assistant"
-    workspace_mode: "work"              # work（卡片交互）或 companion（纯文本对话）
-    allowed_chats: []                   # 白名单 chat_id 列表，空表示不限制
+  - id: "product-assistant"
+    feishu_app_id: "cli_your_feishu_app_id"
+    feishu_app_secret: "your_feishu_app_secret"
+    feishu_verification_token: ""
+    feishu_encrypt_key: ""
+    workspace_dir: "./workspaces/product-assistant"
+    workspace_mode: "work"
+    allowed_chats: []
     claude:
-      permission_mode: "acceptEdits"    # acceptEdits（推荐）或 bypassPermissions
-      provider: "bailian"              # 覆盖默认供应商（可选），对应 providers 中的 key
-      model: "kimi-k2.5"              # 覆盖该供应商的默认模型（可选）
-      effort: "high"                     # 仅 Anthropic 生效，可选 low/medium/high/xhigh/max
-      allowed_tools:                    # 允许 Claude 使用的工具，空表示不限制
+      permission_mode: "acceptEdits"
+      allowed_tools:
         - "Bash"
         - "Read"
         - "Edit"
         - "Write"
-        - "Glob"
-        - "Grep"
-        - "WebFetch"
-        - "WebSearch"
-
-  # 可追加更多 app...
-  - id: "code-review"
-    feishu_app_id: "cli_yyy"
-    feishu_app_secret: "yyy"
-    feishu_verification_token: "yyy"
-    workspace_dir: "/data/workspaces/code-review"
-    allowed_chats:
-      - "oc_abc123"                     # 仅允许特定群聊
-    claude:
-      permission_mode: "acceptEdits"
-      # 不配 provider/model → 使用 default_provider 的默认模型
-      allowed_tools:
-        - "Read"
-        - "Bash"
-
-server:
-  port: 8080                            # HTTP 监听端口（健康检查 GET /health）
-
-claude:
-  timeout_minutes: 5                    # 单次 claude 执行超时（分钟）
-  max_turns: 20                         # claude CLI --max-turns 参数
-  default_provider: "anthropic"         # 默认供应商，必须对应 providers 中的某个 key
-  providers:
-    anthropic:                          # Anthropic 原生（不需要 base_url 和 auth_token）
-      model: "sonnet"                   # 默认模型：别名(sonnet/opus/haiku)或完整ID
-    bailian:                            # 阿里云百炼平台
-      base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
-      auth_token: "sk-your-key"         # 百炼 API Key
-      model: "qwen-plus"               # 百炼默认模型
-
-session:
-  worker_idle_timeout_minutes: 30       # Worker 空闲超时，触发 session 归档
-
-cleanup:
-  attachments_retention_days: 7        # session 归档后附件保留天数
-  attachments_max_days: 30             # 强制清理天数上限（无论是否归档）
-  schedule: "0 2 * * *"               # 清理任务 cron（默认每天凌晨 2 点）
 ```
 
-**配置说明**：
-
-- **`default_provider`**：全局默认供应商名，必须对应 `providers` 中的某个 key。不填默认 `"anthropic"`
-- **`providers`**：供应商定义 map。每个 key 是供应商名，值包含 `base_url`、`auth_token`、`model`。Anthropic 不需要 base_url 和 auth_token（使用 claude CLI 自身认证）
-- **`apps[].claude.provider`**：可选，覆盖 `default_provider`，选择该 app 使用的供应商
-- **`apps[].claude.model`**：可选，覆盖所选供应商的默认模型
-- **`apps[].claude.effort`**：可选，仅 Anthropic 供应商生效，设置推理深度（low/medium/high/xhigh/max）
-- **`apps[].workspace_mode`**：`work`（默认）使用交互式卡片；`companion` 使用纯文本直接回复，更适合陪伴场景
-- **`permission_mode`**：`acceptEdits` 自动接受文件编辑操作（推荐生产环境）；`bypassPermissions` 跳过所有权限确认（高风险，仅测试用）
-- **`allowed_tools`**：限制 Claude 可用的工具，建议按最小权限原则配置
-- **`allowed_chats`**：留空则该应用接受所有来源的消息；填写后只处理白名单内的 chat_id
-- **`encrypt_key`**：飞书消息加密配置，企业安全要求高时建议开启
-
-### 支持的模型
-
-#### Anthropic（默认供应商）
-
-| 模型别名 | 完整 Model ID | 说明 |
-|----------|--------------|------|
-| `sonnet` | `claude-sonnet-4-6` | 最佳编码模型（推荐） |
-| `opus` | `claude-opus-4-6` | 最深推理能力 |
-| `opus-4-7` | `claude-opus-4-7` | 最新 Opus，深度推理（成本追踪待定价注册）|
-| `haiku` | `claude-haiku-4-5-20251001` | 轻量快速，成本最低 |
-
-#### 百炼（阿里云 DashScope）
-
-通过百炼平台可使用以下第三方模型，在 `providers.bailian.model` 或 `apps[].claude.model` 中填写对应模型名：
-
-| 品牌 | 模型 | 能力 |
-|------|------|------|
-| 千问 | `qwen3.5-plus` | 文本生成、深度思考、视觉理解 |
-| 千问 | `qwen3-max-2026-01-23` | 文本生成、深度思考 |
-| 千问 | `qwen3-coder-next` | 文本生成 |
-| 千问 | `qwen3-coder-plus` | 文本生成 |
-| 智谱 | `glm-5` | 文本生成、深度思考 |
-| 智谱 | `glm-4.7` | 文本生成、深度思考 |
-| Kimi | `kimi-k2.5` | 文本生成、深度思考、视觉理解 |
-| MiniMax | `MiniMax-M2.5` | 文本生成、深度思考 |
-
----
-
-## 项目结构
-
-```
-cc-workspace-bot/
-├── cmd/
-│   ├── server/main.go          # 入口：配置加载、组件连线、优雅关闭
-│   └── dbcheck/main.go         # DB 调试工具：查询 session / message 数据
-├── internal/
-│   ├── config/
-│   │   ├── config.go           # Viper YAML 配置结构 + Validate()
-│   │   └── config_test.go
-│   ├── model/
-│   │   └── models.go           # GORM 数据模型（Channel / Session / Message / Task）
-│   ├── db/
-│   │   └── db.go               # SQLite WAL 连接 + AutoMigrate
-│   ├── claude/
-│   │   ├── executor.go         # 子进程调用 claude CLI、SESSION_CONTEXT.md 注入、stream-json 解析
-│   │   ├── sanitize.go         # JSONL 清理（第三方 provider 污染恢复）
-│   │   └── executor_test.go
-│   ├── feishu/
-│   │   ├── receiver.go         # WS 事件解析、附件下载、Dispatcher 接口
-│   │   └── sender.go           # SendThinking / UpdateCard / SendText
-│   ├── session/
-│   │   ├── manager.go          # channel_key → Worker 懒启动（sync.Map + WaitGroup）
-│   │   ├── worker.go           # 串行队列、/new、空闲超时归档、moveAttachments
-│   │   └── segment.go          # 长消息分段发送（避免飞书 4KB 限制）
-│   ├── task/
-│   │   ├── watcher.go          # fsnotify 监听 tasks/ 目录变更
-│   │   ├── scheduler.go        # gocron/v2 调度器管理
-│   │   ├── runner.go           # 任务执行（YAML 加载 + cron 校验 + claude 调用）
-│   │   ├── cleanup.go          # 附件清理（archived + retention_days / max_days）
-│   │   └── migration.go        # Task ID 迁移（旧格式兼容）
-│   └── workspace/
-│       └── init.go             # workspace 目录初始化 + feishu.json 写入 + 模板复制
-├── workspaces/
-│   ├── _template/              # 新 workspace 默认模板（任务型）
-│   │   ├── CLAUDE.md           # AI 指令（含初始化引导、技能索引、安全边界）
-│   │   ├── .claude/
-│   │   │   └── settings.local.json  # 最小权限白名单
-│   │   └── .claude/skills/     # 8 个技能目录
-│   └── _companion/             # 陪伴型 workspace 模板
-│       ├── CLAUDE.md           # 作者框架 + 记忆规则 + 不得出戏约束
-│       ├── memory/             # persona.md / user_profile.md / events.md
-│       ├── tasks/              # 主动唤醒定时任务模板
-│       └── .claude/skills/     # 陪伴型专用技能
-├── docs/
-│   ├── design.md               # 架构设计、时序图、设计决策
-│   ├── companion-workspace-spec.md  # 陪伴型 workspace 规范
-│   ├── langfuse-cost-tracking-design.md  # 成本追踪设计
-│   ├── requirements.md         # 功能需求
-│   └── tech-research.md        # 技术调研
-├── config.yaml.template        # 配置模板（复制为 config.yaml 使用）
-├── init_workspace.sh           # Workspace 一键初始化脚本（任务型）
-├── init_companion_workspace.sh # 陪伴型 workspace 初始化脚本
-├── start.sh                    # 服务启停脚本
-├── go.mod / go.sum
-└── bot.db                      # SQLite 数据库（运行时生成）
-```
-
-**Workspace 运行时目录结构**（由 `init_workspace.sh` 创建）：
-
-```
-workspaces/<app-id>/
-├── CLAUDE.md                   # 场景级 AI 指令（从模板复制，按需自定义）
-├── .memory.lock                # flock 锁文件（框架自动创建）
-├── .claude/
-│   └── settings.local.json    # Claude CLI 权限配置
-├── .claude/
-│   └── skills/
-│       ├── feishu_ops/
-│       │   ├── SKILL.md            # 飞书 API 操作手册
-│       │   ├── feishu.json         # 飞书凭证（0600 权限，不暴露给 LLM）
-│       │   └── scripts/            # Python 脚本（18 个飞书操作）
-│       ├── memory/             # 长记忆读写规范（SKILL.md）
-│       ├── task/               # 定时任务创建规范（SKILL.md）
-│       ├── cases/              # 事件记录规范（SKILL.md）
-│       ├── todo/               # 待办管理（SKILL.md）
-│       ├── insights/           # 感悟记录（SKILL.md）
-│       └── chat_history/       # 历史对话检索（SKILL.md + 脚本）
-├── memory/                     # 长期记忆（跨 session 共享）
-│   ├── MEMORY.md               # 主索引 + 初始化进度
-│   └── user_profile.md         # 用户档案
-├── cases/                      # 事件案例库（claude 按需创建）
-├── tasks/                      # 定时任务 YAML（claude 写，watcher 监听）
-└── sessions/
-    └── <session-id>/           # cmd.Dir 指向这里
-        ├── SESSION_CONTEXT.md  # 框架注入的绝对路径上下文
-        └── attachments/        # 附件（定期清理）
-```
-
----
-
-## 技术栈
-
-| 组件 | 选型 | 说明 |
-|------|------|------|
-| 语言 | Go 1.24+ | 高并发、低内存占用、跨平台（Linux/macOS/Windows）|
-| 飞书 SDK | oapi-sdk-go/v3 | 官方 SDK，WS 模式无需公网 IP |
-| 数据库 | SQLite WAL | CGO-free，单机部署零依赖 |
-| ORM | GORM | AutoMigrate，快速开发 |
-| 配置 | Viper | YAML 配置加载与校验 |
-| 定时任务 | gocron/v2 | 简洁的 cron 调度器 |
-| 文件监听 | fsnotify | 跨平台 inotify 封装 |
-| 文件锁 | gofrs/flock | 跨平台文件锁（替代 Unix flock 命令）|
-| AI 引擎 | Claude CLI (claude) | 子进程调用，stream-json 输出 |
-| 飞书操作 | Python + requests | 18 个独立脚本，凭证文件读取 |
-| 成本追踪 | Langfuse（设计）| Token 用量与成本观测（设计阶段）|
-
----
-
-## 开发指南
-
-### 构建与测试
+3. 初始化一个 workspace：
 
 ```bash
-# 构建
-go build ./...
-
-# 运行测试
-go test ./...
-
-# 测试覆盖率
-go test ./... -cover
-
-# 竞态检测（CI 推荐）
-go test -race ./...
-
-# 静态检查
-go vet ./...
-
-# 格式化
-gofmt -w .
-
-# 依赖整理
-go mod tidy
+./init_workspace.sh product-assistant ./workspaces/product-assistant cli_your_feishu_app_id your_feishu_app_secret
 ```
 
-### 并发设计
+该脚本会创建 workspace 目录、复制默认模板、写入私有 `feishu_ops/feishu.json`，并尝试注册 `lark-cli` profile。`feishu.json` 已被 `.gitignore` 排除，不能提交。
 
-本项目在三个层面保障并发安全：
+4. 编译和测试：
 
-| 层面 | 隔离方式 |
-|------|---------|
-| Session 级写操作 | `cmd.Dir = sessions/<id>/`，每个 session 独立目录 |
-| 跨 session 共享内存 | flock 文件锁（`.claude/skills/memory/` 规范，skill 层实现）|
-| 同一 channel 消息 | Session Worker 串行队列（channel 深度 64）|
+```bash
+go mod download
+go build ./...
+go test ./...
+go vet ./...
+```
 
-### 添加新 Skill
+5. 启动服务：
 
-在 workspace 的 `.claude/skills/<skill-name>/` 目录下新建 `SKILL.md`（含 frontmatter）及所需脚本，在 `CLAUDE.md` 的技能索引表中注册即可。创建新 skill 前先调用 `/skill-creater` 加载规范。
+```bash
+go run ./cmd/server -config config.yaml
+```
 
-如需飞书 Python 脚本，参考 `.claude/skills/feishu_ops/scripts/` 中已有的 18 个脚本和 `_feishu_auth.py` 公共模块。
+也可以构建二进制后用脚本后台运行：
 
-### 关键设计决策
+```bash
+go build -o server ./cmd/server
+./start.sh start
+./start.sh status
+```
 
-| 决策点 | 方案 | 原因 |
-|--------|------|------|
-| 路由信息注入 | prepend 到 prompt（非 SESSION_CONTEXT.md）| 避免并发写同一文件的竞态问题 |
-| 附件处理 | TempDir → moveAttachments → session/attachments/ | 先入队再移动，减少路由器阻塞 |
-| 任务恢复 | 启动时从 DB 查询（非扫描文件系统）| watcher 保证 YAML→DB 同步，DB 记录运行时状态 |
-| 优雅关闭 | `sessionMgr.Wait()` | 等待所有 worker goroutine 完成当前任务后退出 |
-| 多 Provider 支持 | 环境变量注入 `--settings` | 兼容 Anthropic + 百炼桥接，不修改 CLI 默认认证 |
-| Resume 恢复容错 | Sanitize JSONL（`sanitize.go`）| 第三方 provider 污染导致 Anthropic 400 时自动清理重试 |
-| 长消息发送 | Segment 分段（`segment.go`）| 飞书卡片 4KB 限制，超长响应自动分片发送 |
+服务启动后会监听本地健康检查：
 
-更多设计细节见 [设计文档](docs/design.md)。
+```bash
+curl http://127.0.0.1:8080/health
+```
 
----
+返回 `ok` 表示 HTTP 进程正常。飞书 WebSocket 是否连通以服务日志中的 receiver 启动和飞书平台连接状态为准。
+
+## 飞书应用配置
+
+在飞书开放平台中完成以下配置：
+
+1. 创建企业自建应用。
+2. 启用机器人能力，并把机器人加入目标单聊或群聊。
+3. 开启事件订阅，选择 WebSocket 长连接模式。
+4. 订阅消息接收事件，以及按需订阅入群、用户进群、首次单聊事件。
+5. 为机器人开通发送消息、读取消息资源、文档/表格等所需权限。
+6. 将 App ID、App Secret、Verification Token、Encrypt Key 写入本机 `config.yaml`。
+
+如果只想允许指定群使用某个应用，在 `allowed_chats` 中填入飞书 `chat_id`。空数组表示不限制。
+
+## 配置说明
+
+### 应用配置
+
+| 字段 | 必填 | 说明 |
+|---|---:|---|
+| `id` | 是 | workspace ID，也是内部 app 标识，不能包含 `/` |
+| `feishu_app_id` | 是 | 飞书应用 App ID |
+| `feishu_app_secret` | 是 | 飞书应用 App Secret |
+| `feishu_verification_token` | 否 | 飞书事件订阅校验 token，WebSocket 模式可为空 |
+| `feishu_encrypt_key` | 否 | 飞书事件加密 key，不启用加密可为空 |
+| `workspace_dir` | 是 | 应用 workspace 目录 |
+| `workspace_mode` | 否 | `work` 或 `companion`，默认按 `work` 处理 |
+| `allowed_chats` | 否 | 允许访问的 chat_id 白名单 |
+| `claude.permission_mode` | 否 | 传给 Claude CLI 的权限模式 |
+| `claude.allowed_tools` | 否 | 传给 Claude CLI 的工具白名单 |
+| `claude.provider` | 否 | 覆盖全局默认模型供应商 |
+| `claude.model` | 否 | 覆盖供应商默认模型 |
+| `claude.effort` | 否 | Anthropic provider 下传给 Claude CLI 的 effort |
+
+### 模型供应商
+
+默认使用 Claude Code CLI 自身登录态：
+
+```yaml
+claude:
+  default_provider: "anthropic"
+  providers:
+    anthropic:
+      model: "sonnet"
+```
+
+使用兼容 Anthropic 协议的第三方供应商时，在私有 `config.yaml` 中配置：
+
+```yaml
+claude:
+  default_provider: "bailian"
+  providers:
+    bailian:
+      base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+      auth_token: "your_dashscope_api_key"
+      model: "qwen-plus"
+```
+
+`auth_token` 是密钥，只能写在本机私有配置里。
+
+## Workspace 目录
+
+```text
+workspaces/<app-id>/
+  CLAUDE.md
+  .memory.lock
+  .claude/
+    skills/
+      feishu_ops/
+      memory/
+      task/
+      cases/
+      todo/
+      insights/
+      chat_history/
+  memory/
+  tasks/
+  sessions/
+```
+
+公开仓库只保留 `_template` 和 `_companion` 模板。实际业务 workspace 的 `memory/`、`tasks/`、`sessions/`、附件、DB 都属于运行时数据，默认不提交。
+
+## 本地依赖和 Docker
+
+主程序是单进程 Go 服务：
+
+- 数据库：每个 workspace 一个 SQLite 文件 `workspaces/<app>/bot.db`
+- 缓存：核心服务不需要 Redis
+- 消息入口：飞书 WebSocket 长连接
+- AI 执行：本机 `claude` CLI
+
+如果启用可选 Langfuse 观测，建议在本机 Docker 中部署 Langfuse 及其依赖服务，并通过 Claude Code hooks 上报。该能力属于可选观测面，不影响主服务启动。
+
+## 开发
+
+常用命令：
+
+```bash
+go build ./...
+go test ./... -cover
+go vet ./...
+gofmt -w .
+```
+
+调试数据库：
+
+```bash
+go run ./cmd/dbcheck
+```
+
+构建 filelock 辅助工具：
+
+```bash
+go build -o filelock ./cmd/filelock
+```
 
 ## 文档
 
 | 文档 | 说明 |
-|------|------|
-| [设计文档](docs/design.md) | 完整架构设计、时序图、数据模型、设计决策 |
-| [陪伴型 Workspace 规范](docs/companion-workspace-spec.md) | 陪伴型机器人设计规范（作者框架、记忆系统、主动唤醒）|
-| [Langfuse 成本追踪设计](docs/langfuse-cost-tracking-design.md) | Token 用量采集与成本统计设计 |
-| [需求文档](docs/requirements.md) | 功能需求和模块说明 |
-| [技术调研](docs/tech-research.md) | 技术选型背景和实现细节 |
-
----
+|---|---|
+| [需求分析](docs/requirements.md) | 项目目标、用户、场景和需求边界 |
+| [PRD](docs/prd.md) | 产品能力、用户流程和验收标准 |
+| [概要设计](docs/high-level-design.md) | 模块划分、数据流和部署结构 |
+| [详细设计](docs/detailed-design.md) | 关键接口、数据模型、错误处理和测试策略 |
+| [技术调研](docs/tech-research.md) | 主要技术选型依据 |
+| [开源发布审计](docs/open-source-audit.md) | 可公开/不可公开文件边界 |
+| [历史设计归档](docs/archive/README.md) | 已归档的阶段性设计和问题分析 |
 
 ## 许可证
 
-[MIT License](LICENSE)
-
----
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-提交 PR 前请确保：
-- `go test ./...` 全部通过
-- `go vet ./...` 无警告
-- `gofmt -w .` 已格式化
+建议使用 MIT License。发布前请确认 [LICENSE](LICENSE) 是否已经存在并与仓库策略一致。

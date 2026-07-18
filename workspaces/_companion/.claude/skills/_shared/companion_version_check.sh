@@ -5,7 +5,8 @@
 set -euo pipefail
 
 WORKSPACE_DIR="${1:-$(pwd)}"
-TEMPLATE_DIR="${TEMPLATE_DIR:-/root/cc_workspace_bot/workspaces/_companion}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE_DIR="${TEMPLATE_DIR:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 
 WS_NAME=$(basename "$WORKSPACE_DIR")
 TPL_VERSION=$(cat "$TEMPLATE_DIR/VERSION" 2>/dev/null || echo "unknown")

@@ -1,7 +1,7 @@
 # feishu_ops 改造设计文档：引入 lark-cli
 
-**状态**：已确认，实施中  
-**日期**：2026-04-09  
+**状态**：已确认，实施中
+**日期**：2026-04-09
 **背景**：引入 `@larksuite/cli`（lark-cli）后，将 feishu_ops 脚本内部实现从裸 HTTP 改为调用 lark-cli。
 
 ---

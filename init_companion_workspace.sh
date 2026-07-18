@@ -5,7 +5,7 @@
 #   ./init_companion_workspace.sh <app-id> <workspace-dir> <feishu-app-id> <feishu-app-secret>
 #
 # Example:
-#   ./init_companion_workspace.sh aria-companion /root/aria cli_xxx secretxxx
+#   ./init_companion_workspace.sh aria-companion ./workspaces/aria cli_your_app_id your_app_secret
 #
 # 与 init_workspace.sh 的关键差异：
 #   - 模板目录：workspaces/_companion/（不继承 _template）
@@ -37,7 +37,7 @@ usage() {
     echo "  feishu-app-secret 飞书 App Secret"
     echo ""
     echo "Example:"
-    echo "  $0 aria-companion /root/aria cli_abc123 secretXXX"
+    echo "  $0 aria-companion ./workspaces/aria cli_your_app_id your_app_secret"
     exit 1
 }
 

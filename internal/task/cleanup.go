@@ -6,9 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/kid0317/cc-workspace-bot/internal/config"
+	"github.com/kid0317/cc-workspace-bot/internal/db"
 	"github.com/kid0317/cc-workspace-bot/internal/model"
 )
 
@@ -17,14 +16,14 @@ import (
 //   - session is archived AND updated_at older than retention_days
 //   - session created_at older than max_days (force cleanup)
 type Cleaner struct {
-	db   *gorm.DB
-	apps []config.AppConfig
-	cfg  config.CleanupConfig
+	dbReg *db.Registry
+	apps  []config.AppConfig
+	cfg   config.CleanupConfig
 }
 
 // NewCleaner creates a Cleaner and registers the cleanup cron job with sched.
-func NewCleaner(db *gorm.DB, apps []config.AppConfig, cfg config.CleanupConfig, sched *Scheduler) (*Cleaner, error) {
-	c := &Cleaner{db: db, apps: apps, cfg: cfg}
+func NewCleaner(reg *db.Registry, apps []config.AppConfig, cfg config.CleanupConfig, sched *Scheduler) (*Cleaner, error) {
+	c := &Cleaner{dbReg: reg, apps: apps, cfg: cfg}
 	if err := sched.AddFunc("attachment-cleanup", cfg.Schedule, c.Run); err != nil {
 		return nil, err
 	}
@@ -46,8 +45,14 @@ func (c *Cleaner) Run() {
 
 // cleanApp removes stale attachment dirs for one app and returns the count deleted.
 func (c *Cleaner) cleanApp(app *config.AppConfig, retentionCutoff, maxCutoff time.Time) int {
+	appDB, err := c.dbReg.Get(app.ID)
+	if err != nil {
+		slog.Error("cleanup: db not found for app", "app_id", app.ID, "err", err)
+		return 0
+	}
+
 	var sessions []model.Session
-	err := c.db.
+	err = appDB.
 		Joins("JOIN channels ON sessions.channel_key = channels.channel_key").
 		Where("channels.app_id = ?", app.ID).
 		Where(

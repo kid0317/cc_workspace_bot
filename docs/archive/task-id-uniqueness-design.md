@@ -1,7 +1,7 @@
 # Task ID 全局唯一性重构设计
 
-**状态**：待 Review  
-**日期**：2026-04-14  
+**状态**：待 Review
+**日期**：2026-04-14
 **背景**：多 workspace 同名任务文件导致 DB 记录互相覆盖，定时任务静默失效
 
 ---
@@ -14,7 +14,7 @@ tasks 表使用文件名（去掉 `.yaml` 后缀）作为主键 ID。多个 work
 
 ### 真实事故
 
-2026-04-14，xh_yibu 和 ycm_mate 两个陪伴空间均有：
+2026-04-14，workspace_a 和 workspace_b 两个陪伴空间均有：
 
 ```
 tasks/proactive_reach.yaml
@@ -22,7 +22,7 @@ tasks/life_sim.yaml
 tasks/memory_distill.yaml
 ```
 
-ycm_mate 注册时覆盖了 xh_yibu 的三条 DB 记录，xh_yibu 的所有定时任务停止执行，且无任何报错。
+workspace_b 注册时覆盖了 workspace_a 的三条 DB 记录，workspace_a 的所有定时任务停止执行，且无任何报错。
 
 ### 为什么不能靠模型规避
 
@@ -65,8 +65,8 @@ func TaskFileID(base, appID string) string {
 
 | 空间 | 非 UUID 文件名 | 当前状态 |
 |---|---|---|
-| xh_yibu | proactive_reach, life_sim, memory_distill | 有旧裸名 DB 记录 |
-| ycm_mate | proactive_reach, life_sim, memory_distill | 有 `ycm_mate.*` 临时记录 |
+| workspace_a | proactive_reach, life_sim, memory_distill | 有旧裸名 DB 记录 |
+| workspace_b | proactive_reach, life_sim, memory_distill | 有 `workspace_b.*` 临时记录 |
 | ycm_life | morning-todo-8am, evening-fatigue-log-6pm 等4个 | 暂无冲突，但同类空间出现即冲突 |
 | 其他空间 | 全部 UUID 文件名 | 理论安全，实际无冲突 |
 
@@ -86,9 +86,9 @@ func TaskFileID(base, appID string) string {
 ID = app_id + "/" + filename_without_ext
 
 示例：
-  workspace: xh_yibu
+  workspace: workspace_a
   文件: tasks/proactive_reach.yaml
-  → ID: "xh_yibu/proactive_reach"
+  → ID: "workspace_a/proactive_reach"
 
   workspace: investment
   文件: tasks/1ff20d20-4469-4346-8e96-3dda5d71c123.yaml
@@ -153,7 +153,7 @@ case event.Op&fsnotify.Remove != 0:
 
 | 情况 | 处理 |
 |---|---|
-| 新旧 ID 冲突（同一空间有 `foo` 和 `xh_yibu/foo` 同时存在） | 以新格式为准，旧裸名记录 soft delete |
+| 新旧 ID 冲突（同一空间有 `foo` 和 `workspace_a/foo` 同时存在） | 以新格式为准，旧裸名记录 soft delete |
 | app_id 为空（历史脏数据） | 跳过，记录 WARN |
 | 迁移失败（DB 错误） | 记录 ERROR，不阻塞启动（降级：旧记录继续用旧 ID 工作） |
 
@@ -161,9 +161,9 @@ case event.Op&fsnotify.Remove != 0:
 
 | 记录 | 迁移前 ID | 迁移后 ID |
 |---|---|---|
-| xh_yibu proactive_reach（旧裸名） | `proactive_reach` | `xh_yibu/proactive_reach` |
-| xh_yibu life_sim（旧裸名） | `life_sim` | `xh_yibu/life_sim` |
-| ycm_mate.proactive_reach（临时） | `ycm_mate.proactive_reach` | `ycm_mate/proactive_reach` |
+| workspace_a proactive_reach（旧裸名） | `proactive_reach` | `workspace_a/proactive_reach` |
+| workspace_a life_sim（旧裸名） | `life_sim` | `workspace_a/life_sim` |
+| workspace_b.proactive_reach（临时） | `workspace_b.proactive_reach` | `workspace_b/proactive_reach` |
 | investment UUID 任务 | `1ff20d20-...` | `investment/1ff20d20-...` |
 | ycm_life UUID 任务 | `52486d63-...` | `ycm_life/52486d63-...` |
 

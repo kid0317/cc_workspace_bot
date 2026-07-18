@@ -154,20 +154,20 @@ python {_skill_base}/scripts/create_event.py \
 
 ```
 python {_skill_base}/scripts/create_doc.py \
-    --file_path /root/course/ai-pm/前期沟通/前期沟通报告_20260510.md \
+    --file_path "$WORKSPACE_DIR/outputs/report.md" \
     --title "AI PM 前期沟通报告" [--folder_token <token>] [--no-cache]
 ```
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `--file_path` | ✅ | 本地 `.md` 文件绝对路径，**必须在工作区 `/root/course` 内**，≤10MB |
+| `--file_path` | ✅ | 本地 `.md` 文件绝对路径，**必须在当前 workspace 内**，≤10MB |
 | `--title` | 否 | 文档标题（默认取文件名去后缀） |
 | `--folder_token` | 否 | 目标飞书文件夹 token（留空放根目录） |
 | `--no-cache` | 否 | 跳过缓存命中，强制重新上传 |
 
 返回 `data`：`{url, document_id, cached(bool), sha256, record_id}`。
 
-> **上传前要先生成/保存 md 文件时**：见下方「八、文件存放规范」——优先放到项目内合适位置，没有归属时才放 `/root/course/tmp_file/`，禁止放 `/tmp`、CWD、skill 目录内。
+> **上传前要先生成/保存 md 文件时**：见下方「八、文件存放规范」——优先放到项目内合适位置，没有归属时才放 `$WORKSPACE_DIR/tmp_file/`，禁止放 `/tmp`、CWD、skill 目录内。
 
 ### dump_index.py — 查看上传索引
 
@@ -233,10 +233,10 @@ python {_skill_base}/scripts/write_bitable_records.py \
 
 1. **项目内合适位置**（首选）：md 文档若属于工作产物（课程稿、报告、设计文档），放到对应业务目录：
    `ai-pm/`、`multi-agent/`、`企业培训/<客户>/`、`.claude/skills/<skill>/docs/` 等。
-2. **`/root/course/tmp_file/`**（次选）：纯过渡性、无明确归属的 md，放这里（可建子目录）。
+2. **`$WORKSPACE_DIR/tmp_file/`**（次选）：纯过渡性、无明确归属的 md，放这里（可建子目录）。
 3. **禁止**放到 `/tmp`、`/var/tmp`、当前工作目录（CWD）、skill 目录根目录或 `scripts/` 下。
 
-`create_doc.py` 会拒绝工作区（`/root/course`）之外的文件路径，并提示重新放置。
+`create_doc.py` 会拒绝当前 workspace 之外的文件路径，并提示重新放置。
 
 ---
 
